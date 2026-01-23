@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>SHORT GRID ORDER</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
     <style>
         * {
             margin: 0;
@@ -43,7 +44,8 @@
         /* 메인 컨테이너 */
         .container {
             padding: 15px;
-            max-width: 600px;
+            width: 80%;
+            max-width: 1400px;
             margin: 0 auto;
         }
 
@@ -139,32 +141,38 @@
         }
 
         .coin-list {
-            max-height: 200px;
+            max-height: 300px;
             overflow-y: auto;
             border: 1px solid #30363d;
             border-radius: 6px;
+            padding: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
         }
 
         .coin-item {
-            padding: 12px 15px;
-            display: flex;
-            justify-content: space-between;
+            padding: 8px 12px;
+            display: inline-flex;
             align-items: center;
-            border-bottom: 1px solid #21262d;
+            gap: 8px;
+            background: #21262d;
+            border-radius: 6px;
             cursor: pointer;
             transition: background 0.2s;
-        }
-
-        .coin-item:last-child {
-            border-bottom: none;
+            font-size: 13px;
         }
 
         .coin-item:hover {
-            background: #21262d;
+            background: #30363d;
         }
 
         .coin-item.selected {
             background: #238636;
+        }
+
+        .coin-item.bb-upper {
+            background: rgba(63, 185, 80, 0.3);
         }
 
         .coin-item .name {
@@ -174,6 +182,7 @@
         .coin-item .price {
             color: #58a6ff;
             font-family: 'Consolas', monospace;
+            font-size: 11px;
         }
 
         .coin-item .delete-btn {
@@ -376,7 +385,7 @@
     <!-- 헤더 -->
     <div class="header">
         <h1>⚡ SHORT GRID ORDER</h1>
-        <div class="header-info" id="headerInfo">5% 간격 | 8개 주문 | $50/주문 | 총 $400</div>
+        <div class="header-info" id="headerInfo">5% 간격 | 3개 주문 | $100/주문 | 총 $300</div>
     </div>
 
     <div class="container">
@@ -404,14 +413,14 @@
             <div class="coin-list" id="coinList">
                 <div style="padding:20px; text-align:center; color:#8b949e;">코인을 추가하세요</div>
             </div>
-        </div>
 
-        <!-- 선택된 코인 -->
-        <div class="card" id="selectedCoinCard" style="display:none">
-            <div class="selected-coin">
-                <div class="symbol" id="selectedSymbol">-</div>
-                <div class="price" id="selectedPrice">$0.0000</div>
+            <!-- 차트 (리스트 바로 아래) -->
+            <div id="selectedCoinCard" style="display:none; margin-top:15px;">
+                <div id="chartContainer" style="border-radius:8px; overflow:hidden; height:450px; background:#161b22;"></div>
             </div>
+            <!-- 숨겨진 요소 (JS 호환용) -->
+            <div id="selectedSymbol" style="display:none;"></div>
+            <div id="selectedPrice" style="display:none;"></div>
         </div>
 
         <!-- 주문 설정 -->
@@ -437,7 +446,7 @@
                 <span class="setting-label">주문당 금액</span>
                 <div class="setting-control">
                     <button class="btn btn-secondary btn-adj" onclick="adjustAmount(-10)">-</button>
-                    <span class="value" id="amountValue">$50</span>
+                    <span class="value" id="amountValue">$100</span>
                     <button class="btn btn-secondary btn-adj" onclick="adjustAmount(10)">+</button>
                 </div>
             </div>
@@ -446,20 +455,20 @@
                 <span class="setting-label">주문 횟수</span>
                 <div class="setting-control">
                     <button class="btn btn-secondary btn-adj" onclick="adjustCount(-1)">-</button>
-                    <span class="value" id="countValue">8회</span>
+                    <span class="value" id="countValue">3회</span>
                     <button class="btn btn-secondary btn-adj" onclick="adjustCount(1)">+</button>
                 </div>
             </div>
 
             <div class="setting-row">
                 <span class="setting-label">총 투입금액</span>
-                <span class="setting-value total-amount" id="totalAmount">$400</span>
+                <span class="setting-value total-amount" id="totalAmount">$300</span>
             </div>
         </div>
 
         <!-- 주문 버튼 -->
         <button class="btn btn-danger order-btn" id="orderBtn" onclick="placeOrders()" disabled>
-            🚀 숏 주문 실행 (8개)
+            🚀 숏 주문 실행 (3개)
         </button>
 
         <button class="btn btn-secondary" id="cancelBtn" onclick="confirmCancel()" disabled style="margin-top:10px">
@@ -492,13 +501,20 @@
         let apiKey = localStorage.getItem('binance_api_key') || '';
         let apiSecret = localStorage.getItem('binance_api_secret') || '';
         let isConnected = false;
-        let coins = JSON.parse(localStorage.getItem('coin_list') || '[]');
+        const DEFAULT_COINS = ["ELSAUSDT", "ACUUSDT", "AIAUSDT", "SPORTFUNUSDT", "FRAXUSDT", "FOGOUSDT", "ZAMAUSDT", "XAGUSDT", "MAGMAUSDT", "COLLECTUSDT", "BREVUSDT", "LITUSDT", "IRUSDT", "GUAUSDT", "ZKPUSDT", "RAVEUSDT", "CYSUSDT", "USUSDT", "XAUUSDT", "NIGHTUSDT", "WETUSDT", "POWERUSDT", "RVVUSDT", "RIVERUSDT", "LABUSDT", "ZBTUSDT", "RECALLUSDT", "CLOUSDT", "ENSOUSDT", "EULUSDT", "METUSDT", "YBUSDT", "MONUSDT", "GIGGLEUSDT", "4USDT", "KGENUSDT", "LYNUSDT", "EVAAUSDT", "2ZUSDT", "TRUTHUSDT", "NOMUSDT", "VFYUSDT", "EDENUSDT", "FFUSDT", "XANUSDT", "LIGHTUSDT", "ORDERUSDT", "AKEUSDT", "MIRAUSDT", "HANAUSDT", "COAIUSDT", "FLUIDUSDT", "BLESSUSDT"];
+        let coins = JSON.parse(localStorage.getItem('coin_list')) || DEFAULT_COINS;
         let selectedCoin = null;
         let prices = {};
+        let bbStatus = {};  // 볼린저밴드 상단 근처 여부
+
+        // 차트 관련
+        let chart = null;
+        let candleSeries = null;
+        let priceLines = [];
 
         // 주문 설정
-        let orderAmount = 50;
-        let orderCount = 8;
+        let orderAmount = 100;
+        let orderCount = 3;
 
         // 모달 콜백
         let modalCallback = null;
@@ -523,6 +539,10 @@
             if (apiKey && apiSecret) {
                 connectAPI();
             }
+
+            // 볼린저밴드 체크 (시작 시 + 1분마다)
+            setTimeout(checkAllBollingerBands, 2000);
+            setInterval(checkAllBollingerBands, 60000);
         });
 
         // ==================== API 연결 ====================
@@ -643,7 +663,7 @@
             log(`${coin} 삭제됨`, 'info');
         }
 
-        function selectCoin(coin) {
+        async function selectCoin(coin) {
             selectedCoin = coin;
             renderCoinList();
 
@@ -660,6 +680,9 @@
 
             // 실시간 가격 업데이트
             updatePrice(coin);
+
+            // 차트 생성 및 포지션/오더 라인 표시
+            await createChart(coin);
         }
 
         function renderCoinList() {
@@ -670,13 +693,16 @@
                 return;
             }
 
-            list.innerHTML = coins.map(coin => `
-                <div class="coin-item ${coin === selectedCoin ? 'selected' : ''}" onclick="selectCoin('${coin}')">
+            list.innerHTML = coins.map(coin => {
+                const isSelected = coin === selectedCoin ? 'selected' : '';
+                const isBBUpper = bbStatus[coin] ? 'bb-upper' : '';
+                return `
+                <div class="coin-item ${isSelected} ${isBBUpper}" onclick="selectCoin('${coin}')">
                     <span class="name">${coin.replace('USDT', '')}</span>
                     <span class="price">$${(prices[coin] || 0).toFixed(4)}</span>
                     <button class="delete-btn" onclick="removeCoin('${coin}', event)">×</button>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         function saveCoinList() {
@@ -702,6 +728,264 @@
         async function updateAllPrices() {
             for (const coin of coins) {
                 await updatePrice(coin);
+            }
+        }
+
+        // 볼린저밴드 상단 체크
+        async function checkBollingerBand(coin) {
+            try {
+                // 15분봉 21개 조회 (20기간 BB + 현재)
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${coin}&interval=15m&limit=21`);
+                const klines = await res.json();
+
+                if (klines.length < 21) return false;
+
+                // 종가 추출 (index 4)
+                const closes = klines.map(k => parseFloat(k[4]));
+                const currentPrice = closes[closes.length - 1];
+
+                // 20기간 이동평균
+                const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+
+                // 표준편차
+                const variance = closes.slice(-20).reduce((sum, val) => sum + Math.pow(val - ma20, 2), 0) / 20;
+                const stdDev = Math.sqrt(variance);
+
+                // 볼린저밴드 상단
+                const upperBand = ma20 + (2 * stdDev);
+
+                // 상단의 98% 이상이면 상단 근처
+                const isNearUpper = currentPrice >= upperBand * 0.98;
+
+                bbStatus[coin] = isNearUpper;
+                return isNearUpper;
+            } catch (e) {
+                console.error(`BB 체크 실패 (${coin}):`, e);
+                return false;
+            }
+        }
+
+        // 전체 코인 볼린저밴드 체크
+        async function checkAllBollingerBands() {
+            log('볼린저밴드 스캔 중...', 'info');
+            let count = 0;
+            for (const coin of coins) {
+                const isUpper = await checkBollingerBand(coin);
+                if (isUpper) count++;
+            }
+            renderCoinList();
+            log(`볼린저밴드 상단 근처: ${count}개`, 'info');
+        }
+
+        // ==================== 포지션/오더 표시 ====================
+        async function getPosition(symbol) {
+            try {
+                const timestamp = Date.now();
+                const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
+                const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
+
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v2/positionRisk?${params}&signature=${signature}`, {
+                    headers: { 'X-MBX-APIKEY': apiKey }
+                });
+
+                if (!res.ok) return null;
+
+                const positions = await res.json();
+                // SHORT 포지션 찾기
+                const shortPos = positions.find(p => p.positionSide === 'SHORT' && parseFloat(p.positionAmt) !== 0);
+                return shortPos;
+            } catch (e) {
+                console.error('포지션 조회 실패:', e);
+                return null;
+            }
+        }
+
+        async function getOpenOrders(symbol) {
+            try {
+                const timestamp = Date.now();
+                const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
+                const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
+
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/openOrders?${params}&signature=${signature}`, {
+                    headers: { 'X-MBX-APIKEY': apiKey }
+                });
+
+                if (!res.ok) return [];
+
+                return await res.json();
+            } catch (e) {
+                console.error('오픈오더 조회 실패:', e);
+                return [];
+            }
+        }
+
+        // 바이낸스 15분봉 데이터 가져오기
+        async function getKlines(symbol, limit = 100) {
+            try {
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=${limit}`);
+                const data = await res.json();
+                return data.map(k => ({
+                    time: k[0] / 1000,
+                    open: parseFloat(k[1]),
+                    high: parseFloat(k[2]),
+                    low: parseFloat(k[3]),
+                    close: parseFloat(k[4])
+                }));
+            } catch (e) {
+                console.error('캔들 데이터 조회 실패:', e);
+                return [];
+            }
+        }
+
+        // 볼린저밴드 계산
+        function calculateBollingerBands(candles, period = 20, multiplier = 2) {
+            const result = [];
+            for (let i = period - 1; i < candles.length; i++) {
+                const slice = candles.slice(i - period + 1, i + 1);
+                const closes = slice.map(c => c.close);
+                const ma = closes.reduce((a, b) => a + b, 0) / period;
+                const variance = closes.reduce((sum, val) => sum + Math.pow(val - ma, 2), 0) / period;
+                const stdDev = Math.sqrt(variance);
+                result.push({
+                    time: candles[i].time,
+                    upper: ma + (multiplier * stdDev),
+                    middle: ma,
+                    lower: ma - (multiplier * stdDev)
+                });
+            }
+            return result;
+        }
+
+        // 차트 생성
+        async function createChart(symbol) {
+            const container = document.getElementById('chartContainer');
+            container.innerHTML = '';
+
+            // 차트 인스턴스 생성
+            chart = LightweightCharts.createChart(container, {
+                width: container.clientWidth,
+                height: 450,
+                layout: {
+                    background: { color: '#161b22' },
+                    textColor: '#c9d1d9'
+                },
+                grid: {
+                    vertLines: { color: '#21262d' },
+                    horzLines: { color: '#21262d' }
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal
+                },
+                rightPriceScale: {
+                    borderColor: '#30363d'
+                },
+                timeScale: {
+                    borderColor: '#30363d',
+                    timeVisible: true
+                }
+            });
+
+            // 캔들스틱 시리즈
+            candleSeries = chart.addCandlestickSeries({
+                upColor: '#3fb950',
+                downColor: '#f85149',
+                borderUpColor: '#3fb950',
+                borderDownColor: '#f85149',
+                wickUpColor: '#3fb950',
+                wickDownColor: '#f85149'
+            });
+
+            // 캔들 데이터 로드
+            const candles = await getKlines(symbol);
+            if (candles.length > 0) {
+                candleSeries.setData(candles);
+
+                // 볼린저밴드 계산 및 추가
+                const bb = calculateBollingerBands(candles);
+
+                // 상단 밴드
+                const upperSeries = chart.addLineSeries({
+                    color: 'rgba(88, 166, 255, 0.5)',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Solid
+                });
+                upperSeries.setData(bb.map(b => ({ time: b.time, value: b.upper })));
+
+                // 중간선
+                const middleSeries = chart.addLineSeries({
+                    color: 'rgba(88, 166, 255, 0.3)',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed
+                });
+                middleSeries.setData(bb.map(b => ({ time: b.time, value: b.middle })));
+
+                // 하단 밴드
+                const lowerSeries = chart.addLineSeries({
+                    color: 'rgba(88, 166, 255, 0.5)',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Solid
+                });
+                lowerSeries.setData(bb.map(b => ({ time: b.time, value: b.lower })));
+            }
+
+            // 포지션 및 오픈오더 라인 추가
+            if (isConnected) {
+                await addPriceLines(symbol);
+            }
+
+            // 차트 크기 조절
+            chart.timeScale().fitContent();
+
+            // 리사이즈 핸들러
+            window.addEventListener('resize', () => {
+                if (chart) {
+                    chart.applyOptions({ width: container.clientWidth });
+                }
+            });
+        }
+
+        // 포지션/오더 수평선 추가
+        async function addPriceLines(symbol) {
+            // 기존 라인 제거
+            priceLines.forEach(line => {
+                try { candleSeries.removePriceLine(line); } catch(e) {}
+            });
+            priceLines = [];
+
+            const [position, orders] = await Promise.all([
+                getPosition(symbol),
+                getOpenOrders(symbol)
+            ]);
+
+            // 진입가 라인 (빨간색)
+            if (position && parseFloat(position.entryPrice) > 0) {
+                const entryPrice = parseFloat(position.entryPrice);
+                const pnl = parseFloat(position.unRealizedProfit);
+                const line = candleSeries.createPriceLine({
+                    price: entryPrice,
+                    color: '#f85149',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: `진입 (${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)})`
+                });
+                priceLines.push(line);
+            }
+
+            // 오픈오더 라인 (파란색)
+            const shortOrders = orders.filter(o => o.positionSide === 'SHORT' && o.type === 'LIMIT');
+            for (const order of shortOrders) {
+                const price = parseFloat(order.price);
+                const side = order.side === 'SELL' ? '매도' : '매수';
+                const line = candleSeries.createPriceLine({
+                    price: price,
+                    color: '#58a6ff',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: side
+                });
+                priceLines.push(line);
             }
         }
 
@@ -817,7 +1101,21 @@
 
         async function setLeverage(symbol, leverage) {
             const timestamp = Date.now();
-            const params = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp}`;
+
+            // 1. 마진 타입을 격리(ISOLATED)로 설정
+            try {
+                const marginParams = `symbol=${symbol}&marginType=ISOLATED&timestamp=${timestamp}`;
+                const marginSig = CryptoJS.HmacSHA256(marginParams, apiSecret).toString();
+                await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/marginType?${marginParams}&signature=${marginSig}`, {
+                    method: 'POST',
+                    headers: { 'X-MBX-APIKEY': apiKey }
+                });
+            } catch (e) {
+                // 이미 격리 모드인 경우 에러 무시
+            }
+
+            // 2. 레버리지 설정
+            const params = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp + 1}`;
             const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
             await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/leverage?${params}&signature=${signature}`, {
@@ -828,13 +1126,15 @@
 
         async function createOrder(symbol, side, type, quantity, price = null) {
             const timestamp = Date.now();
-            let params = `symbol=${symbol}&side=${side}&type=${type}&quantity=${quantity}&timestamp=${timestamp}`;
+            let params = `symbol=${symbol}&side=${side}&type=${type}&quantity=${quantity}&positionSide=SHORT&recvWindow=60000&timestamp=${timestamp}`;
 
             if (type === 'LIMIT') {
                 params += `&price=${price}&timeInForce=GTC`;
             }
 
             const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
+
+            console.log('Order params:', params);
 
             const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/order?${params}&signature=${signature}`, {
                 method: 'POST',
@@ -843,6 +1143,8 @@
 
             if (!res.ok) {
                 const err = await res.json();
+                console.error('Order Error:', err);
+                log(`API 에러: ${JSON.stringify(err)}`, 'error');
                 throw new Error(err.msg || '주문 실패');
             }
 

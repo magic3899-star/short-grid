@@ -1,0 +1,1230 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>SHORT GRID ORDER</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            min-height: 100vh;
+        }
+
+        /* 헤더 */
+        .header {
+            background: #161b22;
+            padding: 15px 20px;
+            border-bottom: 1px solid #30363d;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header h1 {
+            color: #f85149;
+            font-size: 1.3em;
+            margin-bottom: 5px;
+        }
+
+        .header-info {
+            color: #8b949e;
+            font-size: 0.85em;
+        }
+
+        /* 메인 컨테이너 */
+        .container {
+            padding: 15px;
+            width: 80%;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* 카드 */
+        .card {
+            background: #161b22;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .card-title {
+            color: #8b949e;
+            font-size: 0.85em;
+            font-weight: bold;
+            margin-bottom: 12px;
+        }
+
+        /* API 설정 */
+        .api-input {
+            width: 100%;
+            padding: 12px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #c9d1d9;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .api-input:focus {
+            outline: none;
+            border-color: #58a6ff;
+        }
+
+        .btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: #238636;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2ea043;
+        }
+
+        .btn-danger {
+            background: #f85149;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #da3633;
+        }
+
+        .btn-secondary {
+            background: #21262d;
+            color: #c9d1d9;
+        }
+
+        .btn-secondary:hover {
+            background: #30363d;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* 코인 선택 */
+        .coin-search {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .coin-search input {
+            flex: 1;
+        }
+
+        .coin-search .btn {
+            width: auto;
+            padding: 12px 15px;
+        }
+
+        .coin-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .coin-item {
+            padding: 8px 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #21262d;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 13px;
+        }
+
+        .coin-item:hover {
+            background: #30363d;
+        }
+
+        .coin-item.selected {
+            background: #238636;
+        }
+
+        .coin-item.bb-upper {
+            background: rgba(63, 185, 80, 0.3);
+        }
+
+        .coin-item .name {
+            font-weight: bold;
+        }
+
+        .coin-item .price {
+            color: #58a6ff;
+            font-family: 'Consolas', monospace;
+            font-size: 11px;
+        }
+
+        .coin-item .delete-btn {
+            color: #f85149;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 18px;
+            padding: 0 5px;
+        }
+
+        /* 선택된 코인 정보 */
+        .selected-coin {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .selected-coin .symbol {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #c9d1d9;
+        }
+
+        .selected-coin .price {
+            font-size: 2.2em;
+            font-weight: bold;
+            color: #58a6ff;
+            font-family: 'Consolas', monospace;
+            margin-top: 5px;
+        }
+
+        /* 설정 조정 */
+        .setting-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #21262d;
+        }
+
+        .setting-row:last-child {
+            border-bottom: none;
+        }
+
+        .setting-label {
+            color: #8b949e;
+        }
+
+        .setting-value {
+            color: #c9d1d9;
+            font-weight: bold;
+        }
+
+        .setting-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .setting-control .btn-adj {
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            font-size: 20px;
+            border-radius: 50%;
+        }
+
+        .setting-control .value {
+            min-width: 80px;
+            text-align: center;
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #58a6ff;
+        }
+
+        .total-amount {
+            color: #f0883e !important;
+            font-size: 1.2em !important;
+        }
+
+        /* 주문 버튼 */
+        .order-btn {
+            padding: 18px;
+            font-size: 1.1em;
+        }
+
+        /* 로그 */
+        .log-area {
+            background: #0d1117;
+            border-radius: 6px;
+            padding: 15px;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            max-height: 250px;
+            overflow-y: auto;
+            color: #7ee787;
+        }
+
+        .log-area .error {
+            color: #f85149;
+        }
+
+        .log-area .info {
+            color: #58a6ff;
+        }
+
+        .log-area .success {
+            color: #7ee787;
+        }
+
+        /* 상태 표시 */
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+
+        .status.connected {
+            background: rgba(35, 134, 54, 0.2);
+            color: #7ee787;
+        }
+
+        .status.disconnected {
+            background: rgba(248, 81, 73, 0.2);
+            color: #f85149;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        /* 모달 */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: #161b22;
+            padding: 25px;
+            border-radius: 12px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+
+        .modal-content h3 {
+            margin-bottom: 15px;
+        }
+
+        .modal-content p {
+            color: #8b949e;
+            margin-bottom: 20px;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .modal-buttons .btn {
+            flex: 1;
+        }
+
+        /* 반응형 */
+        @media (max-width: 400px) {
+            .header h1 {
+                font-size: 1.1em;
+            }
+
+            .selected-coin .symbol {
+                font-size: 1.5em;
+            }
+
+            .selected-coin .price {
+                font-size: 1.8em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 헤더 -->
+    <div class="header">
+        <h1>⚡ SHORT GRID ORDER</h1>
+        <div class="header-info" id="headerInfo">5% 간격 | 3개 주문 | $100/주문 | 총 $300</div>
+    </div>
+
+    <div class="container">
+        <!-- API 설정 -->
+        <div class="card" id="apiCard">
+            <div class="card-title">🔑 API 설정</div>
+            <input type="text" class="api-input" id="apiKey" placeholder="API Key">
+            <input type="password" class="api-input" id="apiSecret" placeholder="API Secret">
+            <button class="btn btn-primary" id="connectBtn" onclick="connectAPI()">연결</button>
+        </div>
+
+        <!-- 연결 상태 -->
+        <div class="status disconnected" id="statusBar">
+            <span class="status-dot"></span>
+            <span id="statusText">연결 안됨</span>
+        </div>
+
+        <!-- 코인 선택 -->
+        <div class="card">
+            <div class="card-title">📋 코인 선택</div>
+            <div class="coin-search">
+                <input type="text" class="api-input" id="coinSearch" placeholder="코인 검색 (예: BTC)" style="margin-bottom:0">
+                <button class="btn btn-primary" onclick="addCoin()">+ 추가</button>
+            </div>
+            <div class="coin-list" id="coinList">
+                <div style="padding:20px; text-align:center; color:#8b949e;">코인을 추가하세요</div>
+            </div>
+
+            <!-- 차트 (리스트 바로 아래) -->
+            <div id="selectedCoinCard" style="display:none; margin-top:15px;">
+                <div id="chartContainer" style="border-radius:8px; overflow:hidden; height:450px; background:#161b22;"></div>
+            </div>
+            <!-- 숨겨진 요소 (JS 호환용) -->
+            <div id="selectedSymbol" style="display:none;"></div>
+            <div id="selectedPrice" style="display:none;"></div>
+        </div>
+
+        <!-- 주문 설정 -->
+        <div class="card">
+            <div class="card-title">⚙️ 주문 설정</div>
+
+            <div class="setting-row">
+                <span class="setting-label">레버리지</span>
+                <span class="setting-value">2배 격리</span>
+            </div>
+
+            <div class="setting-row">
+                <span class="setting-label">포지션</span>
+                <span class="setting-value">SHORT</span>
+            </div>
+
+            <div class="setting-row">
+                <span class="setting-label">가격 간격</span>
+                <span class="setting-value">+5%씩</span>
+            </div>
+
+            <div class="setting-row">
+                <span class="setting-label">주문당 금액</span>
+                <div class="setting-control">
+                    <button class="btn btn-secondary btn-adj" onclick="adjustAmount(-10)">-</button>
+                    <span class="value" id="amountValue">$100</span>
+                    <button class="btn btn-secondary btn-adj" onclick="adjustAmount(10)">+</button>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <span class="setting-label">주문 횟수</span>
+                <div class="setting-control">
+                    <button class="btn btn-secondary btn-adj" onclick="adjustCount(-1)">-</button>
+                    <span class="value" id="countValue">3회</span>
+                    <button class="btn btn-secondary btn-adj" onclick="adjustCount(1)">+</button>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <span class="setting-label">총 투입금액</span>
+                <span class="setting-value total-amount" id="totalAmount">$300</span>
+            </div>
+        </div>
+
+        <!-- 주문 버튼 -->
+        <button class="btn btn-danger order-btn" id="orderBtn" onclick="placeOrders()" disabled>
+            🚀 숏 주문 실행 (3개)
+        </button>
+
+        <button class="btn btn-secondary" id="cancelBtn" onclick="confirmCancel()" disabled style="margin-top:10px">
+            🗑 선택 코인 오픈오더 전체 취소
+        </button>
+
+        <!-- 로그 -->
+        <div class="card" style="margin-top:15px">
+            <div class="card-title">📝 실행 로그</div>
+            <div class="log-area" id="logArea">시스템 준비 완료</div>
+        </div>
+    </div>
+
+    <!-- 확인 모달 -->
+    <div class="modal" id="confirmModal">
+        <div class="modal-content">
+            <h3 id="modalTitle">확인</h3>
+            <p id="modalMessage">진행하시겠습니까?</p>
+            <div class="modal-buttons">
+                <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+                <button class="btn btn-danger" id="modalConfirmBtn" onclick="modalConfirm()">확인</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== 전역 변수 ====================
+        const BINANCE_FUTURES_URL = 'https://fapi.binance.com';
+
+        let apiKey = localStorage.getItem('binance_api_key') || '';
+        let apiSecret = localStorage.getItem('binance_api_secret') || '';
+        let isConnected = false;
+        const DEFAULT_COINS = ["ELSAUSDT", "ACUUSDT", "AIAUSDT", "SPORTFUNUSDT", "FRAXUSDT", "FOGOUSDT", "ZAMAUSDT", "XAGUSDT", "MAGMAUSDT", "COLLECTUSDT", "BREVUSDT", "LITUSDT", "IRUSDT", "GUAUSDT", "ZKPUSDT", "RAVEUSDT", "CYSUSDT", "USUSDT", "XAUUSDT", "NIGHTUSDT", "WETUSDT", "POWERUSDT", "RVVUSDT", "RIVERUSDT", "LABUSDT", "ZBTUSDT", "RECALLUSDT", "CLOUSDT", "ENSOUSDT", "EULUSDT", "METUSDT", "YBUSDT", "MONUSDT", "GIGGLEUSDT", "4USDT", "KGENUSDT", "LYNUSDT", "EVAAUSDT", "2ZUSDT", "TRUTHUSDT", "NOMUSDT", "VFYUSDT", "EDENUSDT", "FFUSDT", "XANUSDT", "LIGHTUSDT", "ORDERUSDT", "AKEUSDT", "MIRAUSDT", "HANAUSDT", "COAIUSDT", "FLUIDUSDT", "BLESSUSDT"];
+        let coins = JSON.parse(localStorage.getItem('coin_list')) || DEFAULT_COINS;
+        let selectedCoin = null;
+        let prices = {};
+        let bbStatus = {};  // 볼린저밴드 상단 근처 여부
+
+        // 차트 관련
+        let chart = null;
+        let candleSeries = null;
+        let priceLines = [];
+
+        // 주문 설정
+        let orderAmount = 100;
+        let orderCount = 3;
+
+        // 모달 콜백
+        let modalCallback = null;
+
+        // ==================== 초기화 ====================
+        document.addEventListener('DOMContentLoaded', () => {
+            // 저장된 API 키 로드
+            if (apiKey) {
+                document.getElementById('apiKey').value = apiKey;
+                document.getElementById('apiSecret').value = '••••••••';
+            }
+
+            // 코인 리스트 렌더링
+            renderCoinList();
+
+            // 엔터키 이벤트
+            document.getElementById('coinSearch').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') addCoin();
+            });
+
+            // 자동 연결 시도
+            if (apiKey && apiSecret) {
+                connectAPI();
+            }
+
+            // 볼린저밴드 체크 (시작 시 + 1분마다)
+            setTimeout(checkAllBollingerBands, 2000);
+            setInterval(checkAllBollingerBands, 60000);
+        });
+
+        // ==================== API 연결 ====================
+        async function connectAPI() {
+            const key = document.getElementById('apiKey').value.trim();
+            const secret = document.getElementById('apiSecret').value.trim();
+
+            if (!key || !secret || secret === '••••••••') {
+                if (!apiSecret) {
+                    log('API 키를 입력하세요', 'error');
+                    return;
+                }
+            } else {
+                apiKey = key;
+                apiSecret = secret;
+            }
+
+            log('바이낸스 연결 중...', 'info');
+
+            try {
+                // Ping 테스트
+                const ping = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/ping`);
+                if (!ping.ok) throw new Error('Ping 실패');
+
+                // 계정 정보 확인 (서명 필요)
+                const timestamp = Date.now();
+                const params = `timestamp=${timestamp}`;
+                const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
+
+                const account = await fetch(
+                    `${BINANCE_FUTURES_URL}/fapi/v2/account?${params}&signature=${signature}`,
+                    { headers: { 'X-MBX-APIKEY': apiKey } }
+                );
+
+                if (!account.ok) {
+                    const err = await account.json();
+                    throw new Error(err.msg || 'API 인증 실패');
+                }
+
+                const data = await account.json();
+                const balance = parseFloat(data.totalWalletBalance).toFixed(2);
+
+                // 저장
+                localStorage.setItem('binance_api_key', apiKey);
+                localStorage.setItem('binance_api_secret', apiSecret);
+
+                isConnected = true;
+                updateStatus(true, `연결됨 (잔고: $${balance})`);
+                log(`연결 성공! 잔고: $${balance} USDT`, 'success');
+
+                // API 카드 숨기기
+                document.getElementById('apiCard').style.display = 'none';
+
+                // 가격 업데이트
+                updateAllPrices();
+
+            } catch (e) {
+                log(`연결 실패: ${e.message}`, 'error');
+                updateStatus(false, '연결 실패');
+            }
+        }
+
+        function updateStatus(connected, text) {
+            const bar = document.getElementById('statusBar');
+            const statusText = document.getElementById('statusText');
+
+            bar.className = `status ${connected ? 'connected' : 'disconnected'}`;
+            statusText.textContent = text;
+        }
+
+        // ==================== 코인 관리 ====================
+        async function addCoin() {
+            let coin = document.getElementById('coinSearch').value.trim().toUpperCase();
+            if (!coin) return;
+
+            // USDT 자동 추가
+            if (!coin.endsWith('USDT')) coin += 'USDT';
+
+            // 중복 체크
+            if (coins.includes(coin)) {
+                log(`${coin}은 이미 추가됨`, 'error');
+                return;
+            }
+
+            // 심볼 존재 확인
+            log(`${coin} 확인 중...`, 'info');
+
+            try {
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/ticker/price?symbol=${coin}`);
+                if (!res.ok) throw new Error('존재하지 않는 심볼');
+
+                const data = await res.json();
+                prices[coin] = parseFloat(data.price);
+
+                coins.unshift(coin);
+                saveCoinList();
+                renderCoinList();
+
+                document.getElementById('coinSearch').value = '';
+                log(`${coin} 추가됨 - $${prices[coin].toFixed(4)}`, 'success');
+
+            } catch (e) {
+                log(`${coin} 추가 실패: ${e.message}`, 'error');
+            }
+        }
+
+        function removeCoin(coin, e) {
+            e.stopPropagation();
+            coins = coins.filter(c => c !== coin);
+            if (selectedCoin === coin) {
+                selectedCoin = null;
+                document.getElementById('selectedCoinCard').style.display = 'none';
+                document.getElementById('orderBtn').disabled = true;
+                document.getElementById('cancelBtn').disabled = true;
+            }
+            saveCoinList();
+            renderCoinList();
+            log(`${coin} 삭제됨`, 'info');
+        }
+
+        async function selectCoin(coin) {
+            selectedCoin = coin;
+            renderCoinList();
+
+            document.getElementById('selectedCoinCard').style.display = 'block';
+            document.getElementById('selectedSymbol').textContent = coin.replace('USDT', '');
+
+            const price = prices[coin] || 0;
+            document.getElementById('selectedPrice').textContent = `$${price.toFixed(4)}`;
+
+            document.getElementById('orderBtn').disabled = !isConnected;
+            document.getElementById('cancelBtn').disabled = !isConnected;
+
+            log(`${coin} 선택 - $${price.toFixed(4)}`, 'info');
+
+            // 실시간 가격 업데이트
+            updatePrice(coin);
+
+            // 차트 생성 및 포지션/오더 라인 표시
+            await createChart(coin);
+        }
+
+        function renderCoinList() {
+            const list = document.getElementById('coinList');
+
+            if (coins.length === 0) {
+                list.innerHTML = '<div style="padding:20px; text-align:center; color:#8b949e;">코인을 추가하세요</div>';
+                return;
+            }
+
+            list.innerHTML = coins.map(coin => {
+                const isSelected = coin === selectedCoin ? 'selected' : '';
+                const isBBUpper = bbStatus[coin] ? 'bb-upper' : '';
+                return `
+                <div class="coin-item ${isSelected} ${isBBUpper}" onclick="selectCoin('${coin}')">
+                    <span class="name">${coin.replace('USDT', '')}</span>
+                    <span class="price">$${(prices[coin] || 0).toFixed(4)}</span>
+                    <button class="delete-btn" onclick="removeCoin('${coin}', event)">×</button>
+                </div>
+            `}).join('');
+        }
+
+        function saveCoinList() {
+            localStorage.setItem('coin_list', JSON.stringify(coins));
+        }
+
+        // ==================== 가격 업데이트 ====================
+        async function updatePrice(coin) {
+            try {
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/ticker/price?symbol=${coin}`);
+                const data = await res.json();
+                prices[coin] = parseFloat(data.price);
+
+                if (selectedCoin === coin) {
+                    document.getElementById('selectedPrice').textContent = `$${prices[coin].toFixed(4)}`;
+                }
+                renderCoinList();
+            } catch (e) {
+                console.error('가격 업데이트 실패:', e);
+            }
+        }
+
+        async function updateAllPrices() {
+            for (const coin of coins) {
+                await updatePrice(coin);
+            }
+        }
+
+        // 볼린저밴드 상단 체크
+        async function checkBollingerBand(coin) {
+            try {
+                // 15분봉 21개 조회 (20기간 BB + 현재)
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${coin}&interval=15m&limit=21`);
+                const klines = await res.json();
+
+                if (klines.length < 21) return false;
+
+                // 종가 추출 (index 4)
+                const closes = klines.map(k => parseFloat(k[4]));
+                const currentPrice = closes[closes.length - 1];
+
+                // 20기간 이동평균
+                const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+
+                // 표준편차
+                const variance = closes.slice(-20).reduce((sum, val) => sum + Math.pow(val - ma20, 2), 0) / 20;
+                const stdDev = Math.sqrt(variance);
+
+                // 볼린저밴드 상단
+                const upperBand = ma20 + (2 * stdDev);
+
+                // 상단의 98% 이상이면 상단 근처
+                const isNearUpper = currentPrice >= upperBand * 0.98;
+
+                bbStatus[coin] = isNearUpper;
+                return isNearUpper;
+            } catch (e) {
+                console.error(`BB 체크 실패 (${coin}):`, e);
+                return false;
+            }
+        }
+
+        // 전체 코인 볼린저밴드 체크
+        async function checkAllBollingerBands() {
+            log('볼린저밴드 스캔 중...', 'info');
+            let count = 0;
+            for (const coin of coins) {
+                const isUpper = await checkBollingerBand(coin);
+                if (isUpper) count++;
+            }
+            renderCoinList();
+            log(`볼린저밴드 상단 근처: ${count}개`, 'info');
+        }
+
+        // ==================== 포지션/오더 표시 ====================
+        async function getPosition(symbol) {
+            try {
+                const timestamp = Date.now();
+                const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
+                const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
+
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v2/positionRisk?${params}&signature=${signature}`, {
+                    headers: { 'X-MBX-APIKEY': apiKey }
+                });
+
+                if (!res.ok) return null;
+
+                const positions = await res.json();
+                // SHORT 포지션 찾기
+                const shortPos = positions.find(p => p.positionSide === 'SHORT' && parseFloat(p.positionAmt) !== 0);
+                return shortPos;
+            } catch (e) {
+                console.error('포지션 조회 실패:', e);
+                return null;
+            }
+        }
+
+        async function getOpenOrders(symbol) {
+            try {
+                const timestamp = Date.now();
+                const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
+                const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
+
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/openOrders?${params}&signature=${signature}`, {
+                    headers: { 'X-MBX-APIKEY': apiKey }
+                });
+
+                if (!res.ok) return [];
+
+                return await res.json();
+            } catch (e) {
+                console.error('오픈오더 조회 실패:', e);
+                return [];
+            }
+        }
+
+        // 바이낸스 15분봉 데이터 가져오기
+        async function getKlines(symbol, limit = 100) {
+            try {
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=${limit}`);
+                const data = await res.json();
+                return data.map(k => ({
+                    time: k[0] / 1000,
+                    open: parseFloat(k[1]),
+                    high: parseFloat(k[2]),
+                    low: parseFloat(k[3]),
+                    close: parseFloat(k[4])
+                }));
+            } catch (e) {
+                console.error('캔들 데이터 조회 실패:', e);
+                return [];
+            }
+        }
+
+        // 볼린저밴드 계산
+        function calculateBollingerBands(candles, period = 20, multiplier = 2) {
+            const result = [];
+            for (let i = period - 1; i < candles.length; i++) {
+                const slice = candles.slice(i - period + 1, i + 1);
+                const closes = slice.map(c => c.close);
+                const ma = closes.reduce((a, b) => a + b, 0) / period;
+                const variance = closes.reduce((sum, val) => sum + Math.pow(val - ma, 2), 0) / period;
+                const stdDev = Math.sqrt(variance);
+                result.push({
+                    time: candles[i].time,
+                    upper: ma + (multiplier * stdDev),
+                    middle: ma,
+                    lower: ma - (multiplier * stdDev)
+                });
+            }
+            return result;
+        }
+
+        // 차트 생성
+        async function createChart(symbol) {
+            const container = document.getElementById('chartContainer');
+            container.innerHTML = '';
+
+            // 차트 인스턴스 생성
+            chart = LightweightCharts.createChart(container, {
+                width: container.clientWidth,
+                height: 450,
+                layout: {
+                    background: { color: '#161b22' },
+                    textColor: '#c9d1d9'
+                },
+                grid: {
+                    vertLines: { color: '#21262d' },
+                    horzLines: { color: '#21262d' }
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal
+                },
+                rightPriceScale: {
+                    borderColor: '#30363d'
+                },
+                timeScale: {
+                    borderColor: '#30363d',
+                    timeVisible: true
+                }
+            });
+
+            // 캔들스틱 시리즈
+            candleSeries = chart.addCandlestickSeries({
+                upColor: '#3fb950',
+                downColor: '#f85149',
+                borderUpColor: '#3fb950',
+                borderDownColor: '#f85149',
+                wickUpColor: '#3fb950',
+                wickDownColor: '#f85149'
+            });
+
+            // 캔들 데이터 로드
+            const candles = await getKlines(symbol);
+            if (candles.length > 0) {
+                candleSeries.setData(candles);
+
+                // 볼린저밴드 계산 및 추가
+                const bb = calculateBollingerBands(candles);
+
+                // 상단 밴드
+                const upperSeries = chart.addLineSeries({
+                    color: 'rgba(88, 166, 255, 0.5)',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Solid
+                });
+                upperSeries.setData(bb.map(b => ({ time: b.time, value: b.upper })));
+
+                // 중간선
+                const middleSeries = chart.addLineSeries({
+                    color: 'rgba(88, 166, 255, 0.3)',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed
+                });
+                middleSeries.setData(bb.map(b => ({ time: b.time, value: b.middle })));
+
+                // 하단 밴드
+                const lowerSeries = chart.addLineSeries({
+                    color: 'rgba(88, 166, 255, 0.5)',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Solid
+                });
+                lowerSeries.setData(bb.map(b => ({ time: b.time, value: b.lower })));
+            }
+
+            // 포지션 및 오픈오더 라인 추가
+            if (isConnected) {
+                await addPriceLines(symbol);
+            }
+
+            // 차트 크기 조절
+            chart.timeScale().fitContent();
+
+            // 리사이즈 핸들러
+            window.addEventListener('resize', () => {
+                if (chart) {
+                    chart.applyOptions({ width: container.clientWidth });
+                }
+            });
+        }
+
+        // 포지션/오더 수평선 추가
+        async function addPriceLines(symbol) {
+            // 기존 라인 제거
+            priceLines.forEach(line => {
+                try { candleSeries.removePriceLine(line); } catch(e) {}
+            });
+            priceLines = [];
+
+            const [position, orders] = await Promise.all([
+                getPosition(symbol),
+                getOpenOrders(symbol)
+            ]);
+
+            // 진입가 라인 (빨간색)
+            if (position && parseFloat(position.entryPrice) > 0) {
+                const entryPrice = parseFloat(position.entryPrice);
+                const pnl = parseFloat(position.unRealizedProfit);
+                const line = candleSeries.createPriceLine({
+                    price: entryPrice,
+                    color: '#f85149',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: `진입 (${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)})`
+                });
+                priceLines.push(line);
+            }
+
+            // 오픈오더 라인 (파란색)
+            const shortOrders = orders.filter(o => o.positionSide === 'SHORT' && o.type === 'LIMIT');
+            for (const order of shortOrders) {
+                const price = parseFloat(order.price);
+                const side = order.side === 'SELL' ? '매도' : '매수';
+                const line = candleSeries.createPriceLine({
+                    price: price,
+                    color: '#58a6ff',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: side
+                });
+                priceLines.push(line);
+            }
+        }
+
+        // ==================== 설정 조정 ====================
+        function adjustAmount(delta) {
+            const newAmount = orderAmount + delta;
+            if (newAmount >= 10) {
+                orderAmount = newAmount;
+                updateSettingsDisplay();
+            }
+        }
+
+        function adjustCount(delta) {
+            const newCount = orderCount + delta;
+            if (newCount >= 1 && newCount <= 20) {
+                orderCount = newCount;
+                updateSettingsDisplay();
+            }
+        }
+
+        function updateSettingsDisplay() {
+            document.getElementById('amountValue').textContent = `$${orderAmount}`;
+            document.getElementById('countValue').textContent = `${orderCount}회`;
+            document.getElementById('totalAmount').textContent = `$${orderAmount * orderCount}`;
+            document.getElementById('headerInfo').textContent =
+                `5% 간격 | ${orderCount}개 주문 | $${orderAmount}/주문 | 총 $${orderAmount * orderCount}`;
+            document.getElementById('orderBtn').textContent = `🚀 숏 주문 실행 (${orderCount}개)`;
+        }
+
+        // ==================== 주문 실행 ====================
+        async function placeOrders() {
+            if (!selectedCoin || !isConnected) return;
+
+            const symbol = selectedCoin;
+            const btn = document.getElementById('orderBtn');
+
+            btn.disabled = true;
+            btn.textContent = '⏳ 주문 실행 중...';
+
+            log(`\n${'='.repeat(40)}`, 'info');
+            log(`[시작] ${symbol} 숏 그리드 주문`, 'info');
+
+            try {
+                // 현재가 조회
+                await updatePrice(symbol);
+                const currentPrice = prices[symbol];
+                log(`현재가: $${currentPrice.toFixed(4)}`, 'info');
+
+                // 심볼 정보 조회
+                const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
+                const exchangeData = await exchangeInfo.json();
+                const symbolInfo = exchangeData.symbols.find(s => s.symbol === symbol);
+
+                if (!symbolInfo) throw new Error('심볼 정보 없음');
+
+                const pricePrecision = symbolInfo.pricePrecision;
+                const quantityPrecision = symbolInfo.quantityPrecision;
+                const tickSize = parseFloat(symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER').tickSize);
+                const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
+
+                // 레버리지 설정
+                await setLeverage(symbol, 2);
+                log('레버리지: 2배 격리', 'info');
+
+                // 포지션 크기 계산
+                const positionSize = orderAmount * 2;
+                let success = 0;
+
+                // 1. 시장가 주문
+                log(`\n[1] 시장가 숏 진입 ($${orderAmount} 마진)`, 'info');
+                const firstQty = Math.max(roundStep(positionSize / currentPrice, quantityPrecision), minQty);
+
+                try {
+                    await createOrder(symbol, 'SELL', 'MARKET', firstQty);
+                    log(`  #01 시장가  $${currentPrice.toFixed(4)} x ${firstQty}  ✓`, 'success');
+                    success++;
+                } catch (e) {
+                    log(`  시장가 진입 실패: ${e.message}`, 'error');
+                    throw new Error('진입 실패로 중단');
+                }
+
+                // 2. 지정가 주문
+                const limitCount = orderCount - 1;
+                const maxPercent = limitCount * 5;
+                log(`\n[2] 오픈오더 생성 (+5% ~ +${maxPercent}%)`, 'info');
+
+                for (let i = 1; i < orderCount; i++) {
+                    const orderPrice = roundToTick(currentPrice * (1 + 0.05 * i), tickSize, pricePrecision);
+                    const qty = Math.max(roundStep(positionSize / orderPrice, quantityPrecision), minQty);
+
+                    try {
+                        await createOrder(symbol, 'SELL', 'LIMIT', qty, orderPrice);
+                        log(`  #${String(i+1).padStart(2, '0')} +${i*5}%  $${orderPrice.toFixed(4)} x ${qty}  ✓`, 'success');
+                        success++;
+                    } catch (e) {
+                        log(`  #${String(i+1).padStart(2, '0')} +${i*5}%  실패: ${e.message}`, 'error');
+                    }
+                }
+
+                log(`\n${'='.repeat(40)}`, 'info');
+                log(`[완료] ${success}/${orderCount} 주문 성공!`, 'success');
+
+                alert(`${symbol}\n\n${success}개 숏 주문 완료!\n\n기준가: $${currentPrice.toFixed(4)}\n범위: +5% ~ +${maxPercent}%\n총 투입: $${orderAmount * orderCount}`);
+
+            } catch (e) {
+                log(`[오류] ${e.message}`, 'error');
+                alert(`주문 실패: ${e.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = `🚀 숏 주문 실행 (${orderCount}개)`;
+            }
+        }
+
+        async function setLeverage(symbol, leverage) {
+            const timestamp = Date.now();
+
+            // 1. 마진 타입을 격리(ISOLATED)로 설정
+            try {
+                const marginParams = `symbol=${symbol}&marginType=ISOLATED&timestamp=${timestamp}`;
+                const marginSig = CryptoJS.HmacSHA256(marginParams, apiSecret).toString();
+                await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/marginType?${marginParams}&signature=${marginSig}`, {
+                    method: 'POST',
+                    headers: { 'X-MBX-APIKEY': apiKey }
+                });
+            } catch (e) {
+                // 이미 격리 모드인 경우 에러 무시
+            }
+
+            // 2. 레버리지 설정
+            const params = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp + 1}`;
+            const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
+
+            await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/leverage?${params}&signature=${signature}`, {
+                method: 'POST',
+                headers: { 'X-MBX-APIKEY': apiKey }
+            });
+        }
+
+        async function createOrder(symbol, side, type, quantity, price = null) {
+            const timestamp = Date.now();
+            let params = `symbol=${symbol}&side=${side}&type=${type}&quantity=${quantity}&positionSide=SHORT&recvWindow=60000&timestamp=${timestamp}`;
+
+            if (type === 'LIMIT') {
+                params += `&price=${price}&timeInForce=GTC`;
+            }
+
+            const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
+
+            console.log('Order params:', params);
+
+            const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/order?${params}&signature=${signature}`, {
+                method: 'POST',
+                headers: { 'X-MBX-APIKEY': apiKey }
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                console.error('Order Error:', err);
+                log(`API 에러: ${JSON.stringify(err)}`, 'error');
+                throw new Error(err.msg || '주문 실패');
+            }
+
+            return await res.json();
+        }
+
+        // ==================== 주문 취소 ====================
+        function confirmCancel() {
+            if (!selectedCoin) return;
+
+            showModal(
+                '전체 취소',
+                `${selectedCoin} 오픈오더를 전체 취소하시겠습니까?`,
+                cancelOrders
+            );
+        }
+
+        async function cancelOrders() {
+            if (!selectedCoin || !isConnected) return;
+
+            const symbol = selectedCoin;
+            log(`${symbol} 오픈오더 취소 중...`, 'info');
+
+            try {
+                const timestamp = Date.now();
+                const params = `symbol=${symbol}&timestamp=${timestamp}`;
+                const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
+
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/allOpenOrders?${params}&signature=${signature}`, {
+                    method: 'DELETE',
+                    headers: { 'X-MBX-APIKEY': apiKey }
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.msg || '취소 실패');
+                }
+
+                log(`${symbol} 오픈오더 전체 취소 완료`, 'success');
+                alert(`${symbol}\n오픈오더 전체 취소 완료!`);
+
+            } catch (e) {
+                log(`취소 실패: ${e.message}`, 'error');
+                alert(`취소 실패: ${e.message}`);
+            }
+        }
+
+        // ==================== 유틸리티 ====================
+        function roundToTick(price, tickSize, precision) {
+            return parseFloat((Math.round(price / tickSize) * tickSize).toFixed(precision));
+        }
+
+        function roundStep(value, precision) {
+            return parseFloat(value.toFixed(precision));
+        }
+
+        function log(message, type = '') {
+            const logArea = document.getElementById('logArea');
+            const time = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+            const className = type ? ` class="${type}"` : '';
+            logArea.innerHTML += `\n<span${className}>[${time}] ${message}</span>`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        function showModal(title, message, callback) {
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalMessage').textContent = message;
+            document.getElementById('confirmModal').classList.add('show');
+            modalCallback = callback;
+        }
+
+        function closeModal() {
+            document.getElementById('confirmModal').classList.remove('show');
+            modalCallback = null;
+        }
+
+        function modalConfirm() {
+            closeModal();
+            if (modalCallback) modalCallback();
+        }
+    </script>
+</body>
+</html>

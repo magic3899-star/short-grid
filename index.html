@@ -1106,22 +1106,41 @@
             try {
                 const marginParams = `symbol=${symbol}&marginType=ISOLATED&timestamp=${timestamp}`;
                 const marginSig = CryptoJS.HmacSHA256(marginParams, apiSecret).toString();
-                await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/marginType?${marginParams}&signature=${marginSig}`, {
+                const marginRes = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/marginType?${marginParams}&signature=${marginSig}`, {
                     method: 'POST',
                     headers: { 'X-MBX-APIKEY': apiKey }
                 });
+                // 이미 격리 모드면 -4046 에러 (무시)
+                if (!marginRes.ok) {
+                    const err = await marginRes.json();
+                    if (err.code !== -4046) {
+                        log(`마진타입 설정 실패: ${err.msg}`, 'error');
+                    }
+                }
             } catch (e) {
-                // 이미 격리 모드인 경우 에러 무시
+                // 네트워크 에러 무시
             }
 
-            // 2. 레버리지 설정
+            // 2. 레버리지 설정 (반드시 성공해야 함)
             const params = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp + 1}`;
             const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
-            await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/leverage?${params}&signature=${signature}`, {
+            const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/leverage?${params}&signature=${signature}`, {
                 method: 'POST',
                 headers: { 'X-MBX-APIKEY': apiKey }
             });
+
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(`레버리지 설정 실패: ${err.msg}`);
+            }
+
+            const data = await res.json();
+            if (parseInt(data.leverage) !== leverage) {
+                throw new Error(`레버리지 불일치: 설정=${leverage}x, 실제=${data.leverage}x`);
+            }
+
+            log(`레버리지 확인: ${data.leverage}x 격리`, 'success');
         }
 
         async function createOrder(symbol, side, type, quantity, price = null) {

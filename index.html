@@ -175,6 +175,14 @@
             background: rgba(63, 185, 80, 0.3);
         }
 
+        .coin-item.status-entered {
+            border-left: 3px solid #f85149;
+        }
+
+        .coin-item.status-closed {
+            opacity: 0.5;
+        }
+
         .coin-item .name {
             font-weight: bold;
         }
@@ -416,7 +424,8 @@
 
             <!-- 차트 (리스트 바로 아래) -->
             <div id="selectedCoinCard" style="display:none; margin-top:15px;">
-                <div id="chartContainer" style="border-radius:8px; overflow:hidden; height:450px; background:#161b22;"></div>
+                <div id="chartTitle" style="padding:10px 15px; background:#161b22; border-radius:8px 8px 0 0; border-bottom:1px solid #30363d; font-weight:bold; color:#58a6ff;"></div>
+                <div id="chartContainer" style="border-radius:0 0 8px 8px; overflow:hidden; height:450px; background:#161b22;"></div>
             </div>
             <!-- 숨겨진 요소 (JS 호환용) -->
             <div id="selectedSymbol" style="display:none;"></div>
@@ -439,15 +448,19 @@
 
             <div class="setting-row">
                 <span class="setting-label">가격 간격</span>
-                <span class="setting-value">+5%씩</span>
+                <div class="setting-control">
+                    <button class="btn btn-secondary btn-adj" onclick="adjustInterval(-5)">-</button>
+                    <span class="value" id="intervalValue">+5%</span>
+                    <button class="btn btn-secondary btn-adj" onclick="adjustInterval(5)">+</button>
+                </div>
             </div>
 
             <div class="setting-row">
                 <span class="setting-label">주문당 금액</span>
                 <div class="setting-control">
-                    <button class="btn btn-secondary btn-adj" onclick="adjustAmount(-10)">-</button>
+                    <button class="btn btn-secondary btn-adj" onclick="adjustAmount(-100)">-</button>
                     <span class="value" id="amountValue">$100</span>
-                    <button class="btn btn-secondary btn-adj" onclick="adjustAmount(10)">+</button>
+                    <button class="btn btn-secondary btn-adj" onclick="adjustAmount(100)">+</button>
                 </div>
             </div>
 
@@ -501,11 +514,21 @@
         let apiKey = localStorage.getItem('binance_api_key') || '';
         let apiSecret = localStorage.getItem('binance_api_secret') || '';
         let isConnected = false;
-        const DEFAULT_COINS = ["ELSAUSDT", "ACUUSDT", "AIAUSDT", "SPORTFUNUSDT", "FRAXUSDT", "FOGOUSDT", "ZAMAUSDT", "XAGUSDT", "MAGMAUSDT", "COLLECTUSDT", "BREVUSDT", "LITUSDT", "IRUSDT", "GUAUSDT", "ZKPUSDT", "RAVEUSDT", "CYSUSDT", "USUSDT", "XAUUSDT", "NIGHTUSDT", "WETUSDT", "POWERUSDT", "RVVUSDT", "RIVERUSDT", "LABUSDT", "ZBTUSDT", "RECALLUSDT", "CLOUSDT", "ENSOUSDT", "EULUSDT", "METUSDT", "YBUSDT", "MONUSDT", "GIGGLEUSDT", "4USDT", "KGENUSDT", "LYNUSDT", "EVAAUSDT", "2ZUSDT", "TRUTHUSDT", "NOMUSDT", "VFYUSDT", "EDENUSDT", "FFUSDT", "XANUSDT", "LIGHTUSDT", "ORDERUSDT", "AKEUSDT", "MIRAUSDT", "HANAUSDT", "COAIUSDT", "FLUIDUSDT", "BLESSUSDT"];
-        let coins = JSON.parse(localStorage.getItem('coin_list')) || DEFAULT_COINS;
+
+        // 워치리스트 설정
+        const MAX_WATCHLIST = 50;
+        const MAX_LISTING_DAYS = 90;
+
+        // 코인 데이터: { symbol, added_at, status }
+        // status: 'WATCHING' | 'ENTERED' | 'CLOSED'
+        let coinData = JSON.parse(localStorage.getItem('coin_data')) || {};
+        let coins = Object.keys(coinData).length > 0
+            ? Object.keys(coinData).sort((a, b) => new Date(coinData[a].added_at) - new Date(coinData[b].added_at))
+            : [];
         let selectedCoin = null;
         let prices = {};
         let bbStatus = {};  // 볼린저밴드 상단 근처 여부
+        let positionSymbols = new Set();  // 포지션 보유 심볼
 
         // 차트 관련
         let chart = null;
@@ -515,6 +538,7 @@
         // 주문 설정
         let orderAmount = 100;
         let orderCount = 3;
+        let orderInterval = 5;  // 가격 간격 %
 
         // 모달 콜백
         let modalCallback = null;
@@ -543,6 +567,10 @@
             // 볼린저밴드 체크 (시작 시 + 1분마다)
             setTimeout(checkAllBollingerBands, 2000);
             setInterval(checkAllBollingerBands, 60000);
+
+            // 신규상장 스캔 (시작 시 + 10분마다)
+            setTimeout(scanNewListings, 3000);
+            setInterval(scanNewListings, 600000);  // 10분 = 600000ms
         });
 
         // ==================== API 연결 ====================
@@ -622,8 +650,9 @@
             if (!coin.endsWith('USDT')) coin += 'USDT';
 
             // 중복 체크
-            if (coins.includes(coin)) {
+            if (coinData[coin]) {
                 log(`${coin}은 이미 추가됨`, 'error');
+                alert(`${coin}은 이미 리스트에 있습니다.`);
                 return;
             }
 
@@ -637,8 +666,17 @@
                 const data = await res.json();
                 prices[coin] = parseFloat(data.price);
 
-                coins.unshift(coin);
-                saveCoinList();
+                // coinData에 추가
+                coinData[coin] = {
+                    added_at: new Date().toISOString(),
+                    status: 'WATCHING'
+                };
+                saveCoinData();
+
+                // coins 배열 갱신
+                coins = Object.keys(coinData).sort((a, b) =>
+                    new Date(coinData[a].added_at) - new Date(coinData[b].added_at)
+                );
                 renderCoinList();
 
                 document.getElementById('coinSearch').value = '';
@@ -651,14 +689,29 @@
 
         function removeCoin(coin, e) {
             e.stopPropagation();
-            coins = coins.filter(c => c !== coin);
+
+            // 포지션 보호: ENTERED 상태면 삭제 불가
+            if (coinData[coin] && coinData[coin].status === 'ENTERED') {
+                log(`${coin} 삭제 불가: 포지션 보유 중`, 'error');
+                alert(`${coin}\n포지션 보유 중이라 삭제할 수 없습니다.`);
+                return;
+            }
+
+            // coinData에서 삭제
+            delete coinData[coin];
+            saveCoinData();
+
+            // coins 배열 갱신
+            coins = Object.keys(coinData).sort((a, b) =>
+                new Date(coinData[a].added_at) - new Date(coinData[b].added_at)
+            );
+
             if (selectedCoin === coin) {
                 selectedCoin = null;
                 document.getElementById('selectedCoinCard').style.display = 'none';
                 document.getElementById('orderBtn').disabled = true;
                 document.getElementById('cancelBtn').disabled = true;
             }
-            saveCoinList();
             renderCoinList();
             log(`${coin} 삭제됨`, 'info');
         }
@@ -668,6 +721,7 @@
             renderCoinList();
 
             document.getElementById('selectedCoinCard').style.display = 'block';
+            document.getElementById('chartTitle').textContent = `${coin.replace('USDT', '')} / USDT  •  4시간봉`;
             document.getElementById('selectedSymbol').textContent = coin.replace('USDT', '');
 
             const price = prices[coin] || 0;
@@ -689,16 +743,19 @@
             const list = document.getElementById('coinList');
 
             if (coins.length === 0) {
-                list.innerHTML = '<div style="padding:20px; text-align:center; color:#8b949e;">코인을 추가하세요</div>';
+                list.innerHTML = '<div style="padding:20px; text-align:center; color:#8b949e;">신규상장 스캔 대기 중...</div>';
                 return;
             }
 
             list.innerHTML = coins.map(coin => {
                 const isSelected = coin === selectedCoin ? 'selected' : '';
                 const isBBUpper = bbStatus[coin] ? 'bb-upper' : '';
+                const data = coinData[coin] || { status: 'WATCHING' };
+                const statusIcon = data.status === 'ENTERED' ? '🔴' : data.status === 'CLOSED' ? '⚫' : '';
+                const statusClass = data.status === 'ENTERED' ? 'status-entered' : data.status === 'CLOSED' ? 'status-closed' : '';
                 return `
-                <div class="coin-item ${isSelected} ${isBBUpper}" onclick="selectCoin('${coin}')">
-                    <span class="name">${coin.replace('USDT', '')}</span>
+                <div class="coin-item ${isSelected} ${isBBUpper} ${statusClass}" onclick="selectCoin('${coin}')">
+                    <span class="name">${statusIcon}${coin.replace('USDT', '')}</span>
                     <span class="price">$${(prices[coin] || 0).toFixed(4)}</span>
                     <button class="delete-btn" onclick="removeCoin('${coin}', event)">×</button>
                 </div>
@@ -706,7 +763,7 @@
         }
 
         function saveCoinList() {
-            localStorage.setItem('coin_list', JSON.stringify(coins));
+            // 더 이상 사용 안함 - coinData로 대체
         }
 
         // ==================== 가격 업데이트 ====================
@@ -731,11 +788,10 @@
             }
         }
 
-        // 볼린저밴드 상단 체크
-        async function checkBollingerBand(coin) {
+        // 특정 타임프레임의 볼린저밴드 상단 체크
+        async function checkBBForTimeframe(coin, interval) {
             try {
-                // 15분봉 21개 조회 (20기간 BB + 현재)
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${coin}&interval=15m&limit=21`);
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${coin}&interval=${interval}&limit=21`);
                 const klines = await res.json();
 
                 if (klines.length < 21) return false;
@@ -755,10 +811,25 @@
                 const upperBand = ma20 + (2 * stdDev);
 
                 // 상단의 98% 이상이면 상단 근처
-                const isNearUpper = currentPrice >= upperBand * 0.98;
+                return currentPrice >= upperBand * 0.98;
+            } catch (e) {
+                console.error(`BB 체크 실패 (${coin}, ${interval}):`, e);
+                return false;
+            }
+        }
 
-                bbStatus[coin] = isNearUpper;
-                return isNearUpper;
+        // 볼린저밴드 상단 체크 (15분봉 + 4시간봉 둘 다)
+        async function checkBollingerBand(coin) {
+            try {
+                const [is15mUpper, is4hUpper] = await Promise.all([
+                    checkBBForTimeframe(coin, '15m'),
+                    checkBBForTimeframe(coin, '4h')
+                ]);
+
+                // 둘 다 상단일 때만 true
+                const isBothUpper = is15mUpper && is4hUpper;
+                bbStatus[coin] = isBothUpper;
+                return isBothUpper;
             } catch (e) {
                 console.error(`BB 체크 실패 (${coin}):`, e);
                 return false;
@@ -767,14 +838,154 @@
 
         // 전체 코인 볼린저밴드 체크
         async function checkAllBollingerBands() {
-            log('볼린저밴드 스캔 중...', 'info');
+            log('볼린저밴드 스캔 중 (15분+4시간)...', 'info');
             let count = 0;
             for (const coin of coins) {
                 const isUpper = await checkBollingerBand(coin);
                 if (isUpper) count++;
             }
             renderCoinList();
-            log(`볼린저밴드 상단 근처: ${count}개`, 'info');
+            log(`15분+4시간 볼밴 상단: ${count}개`, 'info');
+        }
+
+        // ==================== 신규상장 자동 감지 ====================
+
+        // 심볼 유효성 검사 (ASCII만, _제외)
+        function isValidSymbol(symbol) {
+            if (symbol.includes('_')) return false;  // 만기계약 제외
+            if (!/^[A-Z0-9]+$/.test(symbol)) return false;  // 비ASCII 제외
+            if (!symbol.endsWith('USDT')) return false;  // USDT 페어만
+            return true;
+        }
+
+        // 일봉 개수로 상장일 확인 (30일 이하)
+        async function isNewListing(symbol) {
+            try {
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=${MAX_LISTING_DAYS + 1}`);
+                if (!res.ok) return false;
+                const data = await res.json();
+                return data.length <= MAX_LISTING_DAYS;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        // 모든 포지션 심볼 조회
+        async function updatePositionSymbols() {
+            if (!isConnected) return;
+            try {
+                const timestamp = Date.now();
+                const params = `recvWindow=60000&timestamp=${timestamp}`;
+                const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v2/positionRisk?${params}&signature=${signature}`, {
+                    headers: { 'X-MBX-APIKEY': apiKey }
+                });
+                if (!res.ok) return;
+                const positions = await res.json();
+                positionSymbols = new Set(
+                    positions
+                        .filter(p => parseFloat(p.positionAmt) !== 0)
+                        .map(p => p.symbol)
+                );
+                // 포지션 있는 코인 상태 업데이트
+                for (const symbol of positionSymbols) {
+                    if (coinData[symbol]) {
+                        coinData[symbol].status = 'ENTERED';
+                    }
+                }
+                saveCoinData();
+            } catch (e) {
+                console.error('포지션 조회 실패:', e);
+            }
+        }
+
+        // 신규상장 스캔
+        async function scanNewListings() {
+            log('신규상장 스캔 중...', 'info');
+
+            try {
+                // 1. 바이낸스 선물 전체 심볼 조회
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
+                const data = await res.json();
+                const allSymbols = data.symbols
+                    .filter(s => s.status === 'TRADING' && s.contractType === 'PERPETUAL')
+                    .map(s => s.symbol)
+                    .filter(isValidSymbol);
+
+                // 2. 포지션 정보 업데이트
+                await updatePositionSymbols();
+
+                // 3. 신규상장 확인
+                let newCount = 0;
+                for (const symbol of allSymbols) {
+                    if (coinData[symbol]) continue;  // 이미 워치리스트에 있음
+
+                    const isNew = await isNewListing(symbol);
+                    if (!isNew) continue;
+
+                    // 신규 코인 발견!
+                    newCount++;
+                    await addToWatchlist(symbol);
+                    log(`신규상장 발견: ${symbol}`, 'success');
+                }
+
+                // 4. 상태 정리 (포지션 없고 ENTERED인 것 → CLOSED)
+                for (const symbol of Object.keys(coinData)) {
+                    if (coinData[symbol].status === 'ENTERED' && !positionSymbols.has(symbol)) {
+                        coinData[symbol].status = 'CLOSED';
+                    }
+                }
+                saveCoinData();
+
+                // 5. 코인 리스트 갱신
+                coins = Object.keys(coinData).sort((a, b) =>
+                    new Date(coinData[a].added_at) - new Date(coinData[b].added_at)
+                );
+                renderCoinList();
+
+                log(`스캔 완료: 신규 ${newCount}개 / 총 ${coins.length}개`, 'info');
+
+            } catch (e) {
+                log(`스캔 실패: ${e.message}`, 'error');
+            }
+        }
+
+        // 워치리스트에 추가
+        async function addToWatchlist(symbol) {
+            // 워치리스트가 가득 찼으면 정리
+            if (Object.keys(coinData).length >= MAX_WATCHLIST) {
+                // 포지션 없는 가장 오래된 코인 찾기
+                const sortedCoins = Object.keys(coinData).sort((a, b) =>
+                    new Date(coinData[a].added_at) - new Date(coinData[b].added_at)
+                );
+
+                let removed = false;
+                for (const oldCoin of sortedCoins) {
+                    if (!positionSymbols.has(oldCoin) && coinData[oldCoin].status !== 'ENTERED') {
+                        delete coinData[oldCoin];
+                        log(`워치리스트 정리: ${oldCoin} 삭제`, 'info');
+                        removed = true;
+                        break;
+                    }
+                }
+
+                // 모두 포지션 있으면 50개 초과 허용
+                if (!removed) {
+                    log(`워치리스트 50개 초과 허용 (모두 포지션 보유)`, 'info');
+                }
+            }
+
+            // 새 코인 추가
+            coinData[symbol] = {
+                added_at: new Date().toISOString(),
+                status: 'WATCHING'
+            };
+            saveCoinData();
+        }
+
+        // 코인 데이터 저장
+        function saveCoinData() {
+            localStorage.setItem('coin_data', JSON.stringify(coinData));
         }
 
         // ==================== 포지션/오더 표시 ====================
@@ -819,10 +1030,10 @@
             }
         }
 
-        // 바이낸스 15분봉 데이터 가져오기
+        // 바이낸스 4시간봉 데이터 가져오기
         async function getKlines(symbol, limit = 100) {
             try {
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${symbol}&interval=15m&limit=${limit}`);
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${symbol}&interval=4h&limit=${limit}`);
                 const data = await res.json();
                 return data.map(k => ({
                     time: k[0] / 1000,
@@ -1006,12 +1217,21 @@
             }
         }
 
+        function adjustInterval(delta) {
+            const newInterval = orderInterval + delta;
+            if (newInterval >= 5 && newInterval <= 50) {
+                orderInterval = newInterval;
+                updateSettingsDisplay();
+            }
+        }
+
         function updateSettingsDisplay() {
             document.getElementById('amountValue').textContent = `$${orderAmount}`;
             document.getElementById('countValue').textContent = `${orderCount}회`;
+            document.getElementById('intervalValue').textContent = `+${orderInterval}%`;
             document.getElementById('totalAmount').textContent = `$${orderAmount * orderCount}`;
             document.getElementById('headerInfo').textContent =
-                `5% 간격 | ${orderCount}개 주문 | $${orderAmount}/주문 | 총 $${orderAmount * orderCount}`;
+                `${orderInterval}% 간격 | ${orderCount}개 주문 | $${orderAmount}/주문 | 총 $${orderAmount * orderCount}`;
             document.getElementById('orderBtn').textContent = `🚀 숏 주문 실행 (${orderCount}개)`;
         }
 
@@ -1069,26 +1289,26 @@
 
                 // 2. 지정가 주문
                 const limitCount = orderCount - 1;
-                const maxPercent = limitCount * 5;
-                log(`\n[2] 오픈오더 생성 (+5% ~ +${maxPercent}%)`, 'info');
+                const maxPercent = limitCount * orderInterval;
+                log(`\n[2] 오픈오더 생성 (+${orderInterval}% ~ +${maxPercent}%)`, 'info');
 
                 for (let i = 1; i < orderCount; i++) {
-                    const orderPrice = roundToTick(currentPrice * (1 + 0.05 * i), tickSize, pricePrecision);
+                    const orderPrice = roundToTick(currentPrice * (1 + (orderInterval / 100) * i), tickSize, pricePrecision);
                     const qty = Math.max(roundStep(positionSize / orderPrice, quantityPrecision), minQty);
 
                     try {
                         await createOrder(symbol, 'SELL', 'LIMIT', qty, orderPrice);
-                        log(`  #${String(i+1).padStart(2, '0')} +${i*5}%  $${orderPrice.toFixed(4)} x ${qty}  ✓`, 'success');
+                        log(`  #${String(i+1).padStart(2, '0')} +${i*orderInterval}%  $${orderPrice.toFixed(4)} x ${qty}  ✓`, 'success');
                         success++;
                     } catch (e) {
-                        log(`  #${String(i+1).padStart(2, '0')} +${i*5}%  실패: ${e.message}`, 'error');
+                        log(`  #${String(i+1).padStart(2, '0')} +${i*orderInterval}%  실패: ${e.message}`, 'error');
                     }
                 }
 
                 log(`\n${'='.repeat(40)}`, 'info');
                 log(`[완료] ${success}/${orderCount} 주문 성공!`, 'success');
 
-                alert(`${symbol}\n\n${success}개 숏 주문 완료!\n\n기준가: $${currentPrice.toFixed(4)}\n범위: +5% ~ +${maxPercent}%\n총 투입: $${orderAmount * orderCount}`);
+                alert(`${symbol}\n\n${success}개 숏 주문 완료!\n\n기준가: $${currentPrice.toFixed(4)}\n범위: +${orderInterval}% ~ +${maxPercent}%\n총 투입: $${orderAmount * orderCount}`);
 
             } catch (e) {
                 log(`[오류] ${e.message}`, 'error');

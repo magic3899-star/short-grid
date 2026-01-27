@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(start python:*)",
+      "Bash(start pythonw short_order_gui.py)",
+      "Bash(powershell:*)",
+      "Bash(pythonw:*)",
+      "Bash(python:*)",
+      "Bash(curl:*)",
+      "Bash(git init:*)",
+      "Bash(git remote add:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd chart with position/order lines and Bollinger Bands\n\n- Replace TradingView iframe with Lightweight Charts library\n- Add 15min candlestick chart from Binance API\n- Display Bollinger Bands \\(20-period, 2 std dev\\)\n- Show entry position line \\(red\\) with PnL\n- Show open order lines \\(blue, dashed\\)\n- Highlight coins near BB upper with green background\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git config:*)",
+      "Bash(git push:*)",
+      "Bash(where:*)",
+      "Bash(node -e:*)",
+      "Bash(w32tm /resync:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFeature: 신규상장 자동 감지 + UI 개선\n\n## 신규상장 자동 감지\n- 10분 주기 자동 스캔\n- 90일 이내 상장 코인 자동 추가\n- 바이낸스 선물 USDT 무기한만 \\(만기계약/비ASCII 제외\\)\n\n## 워치리스트 관리\n- MAX 50개 유지\n- 포지션 없는 가장 오래된 코인부터 삭제\n- 포지션 보유 시 삭제 불가 \\(보호\\)\n\n## 상태 표시\n- 🔴 ENTERED: 진입 완료\n- ⚫ CLOSED: 청산 완료\n- \\(없음\\) WATCHING: 관찰 중\n\n## UI 개선\n- 차트 타이틀 추가 \\(종목/4시간봉\\)\n- 가격 간격 조절 가능 \\(5%~50%\\)\n- 주문당 금액 $100 단위 조절\n- 중복 코인 추가시 alert 표시\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit:*)"
+    ]
+  }
+}

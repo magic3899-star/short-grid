@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(start \"\" \"c:/Users/magic/OneDrive/1 자동매매/1 자동숏 그리드/web/index.html\")"
+    ]
+  }
+}

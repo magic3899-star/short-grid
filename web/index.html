@@ -183,6 +183,23 @@
             opacity: 0.5;
         }
 
+        .price-input {
+            width: 120px;
+            padding: 8px 10px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #58a6ff;
+            font-family: 'Consolas', monospace;
+            font-size: 14px;
+            text-align: right;
+        }
+
+        .price-input:focus {
+            outline: none;
+            border-color: #58a6ff;
+        }
+
         .coin-item .name {
             font-weight: bold;
         }
@@ -190,7 +207,6 @@
         .coin-item .price {
             color: #58a6ff;
             font-family: 'Consolas', monospace;
-            font-size: 11px;
         }
 
         .coin-item .delete-btn {
@@ -447,6 +463,14 @@
             </div>
 
             <div class="setting-row">
+                <span class="setting-label">기준가</span>
+                <div class="setting-control">
+                    <input type="number" id="basePriceInput" class="price-input" placeholder="코인 선택" step="any">
+                    <button class="btn btn-secondary btn-adj" onclick="resetBasePrice()" title="현재가로 리셋">↻</button>
+                </div>
+            </div>
+
+            <div class="setting-row">
                 <span class="setting-label">가격 간격</span>
                 <div class="setting-control">
                     <button class="btn btn-secondary btn-adj" onclick="adjustInterval(-5)">-</button>
@@ -529,6 +553,7 @@
         let prices = {};
         let bbStatus = {};  // 볼린저밴드 상단 근처 여부
         let positionSymbols = new Set();  // 포지션 보유 심볼
+        let basePrice = 0;  // 주문 기준가
 
         // 차트 관련
         let chart = null;
@@ -727,16 +752,29 @@
             const price = prices[coin] || 0;
             document.getElementById('selectedPrice').textContent = `$${price.toFixed(4)}`;
 
+            // 기준가 설정
+            basePrice = price;
+            document.getElementById('basePriceInput').value = price.toFixed(6);
+
             document.getElementById('orderBtn').disabled = !isConnected;
             document.getElementById('cancelBtn').disabled = !isConnected;
 
             log(`${coin} 선택 - $${price.toFixed(4)}`, 'info');
 
             // 실시간 가격 업데이트
-            updatePrice(coin);
+            await updatePrice(coin);
 
             // 차트 생성 및 포지션/오더 라인 표시
             await createChart(coin);
+        }
+
+        // 기준가 현재가로 리셋
+        function resetBasePrice() {
+            if (!selectedCoin) return;
+            const price = prices[selectedCoin] || 0;
+            basePrice = price;
+            document.getElementById('basePriceInput').value = price.toFixed(6);
+            log(`기준가 리셋: $${price.toFixed(4)}`, 'info');
         }
 
         function renderCoinList() {
@@ -1254,6 +1292,13 @@
                 const currentPrice = prices[symbol];
                 log(`현재가: $${currentPrice.toFixed(4)}`, 'info');
 
+                // 기준가 확인 (입력값 사용)
+                const inputPrice = parseFloat(document.getElementById('basePriceInput').value);
+                const orderBasePrice = inputPrice > 0 ? inputPrice : currentPrice;
+                if (inputPrice > 0 && inputPrice !== currentPrice) {
+                    log(`기준가: $${orderBasePrice.toFixed(4)} (수동 설정)`, 'info');
+                }
+
                 // 심볼 정보 조회
                 const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
                 const exchangeData = await exchangeInfo.json();
@@ -1282,18 +1327,27 @@
                     await createOrder(symbol, 'SELL', 'MARKET', firstQty);
                     log(`  #01 시장가  $${currentPrice.toFixed(4)} x ${firstQty}  ✓`, 'success');
                     success++;
+
+                    // TP 주문 (9% 익절)
+                    const tpPrice = roundToTick(currentPrice * 0.91, tickSize, pricePrecision);
+                    try {
+                        await createOrder(symbol, 'BUY', 'LIMIT', firstQty, tpPrice);
+                        log(`  TP -9%  $${tpPrice.toFixed(4)} x ${firstQty}  ✓`, 'success');
+                    } catch (tpErr) {
+                        log(`  TP 주문 실패: ${tpErr.message}`, 'error');
+                    }
                 } catch (e) {
                     log(`  시장가 진입 실패: ${e.message}`, 'error');
                     throw new Error('진입 실패로 중단');
                 }
 
-                // 2. 지정가 주문
+                // 2. 지정가 주문 (기준가 기반)
                 const limitCount = orderCount - 1;
                 const maxPercent = limitCount * orderInterval;
                 log(`\n[2] 오픈오더 생성 (+${orderInterval}% ~ +${maxPercent}%)`, 'info');
 
                 for (let i = 1; i < orderCount; i++) {
-                    const orderPrice = roundToTick(currentPrice * (1 + (orderInterval / 100) * i), tickSize, pricePrecision);
+                    const orderPrice = roundToTick(orderBasePrice * (1 + (orderInterval / 100) * i), tickSize, pricePrecision);
                     const qty = Math.max(roundStep(positionSize / orderPrice, quantityPrecision), minQty);
 
                     try {
@@ -1308,7 +1362,7 @@
                 log(`\n${'='.repeat(40)}`, 'info');
                 log(`[완료] ${success}/${orderCount} 주문 성공!`, 'success');
 
-                alert(`${symbol}\n\n${success}개 숏 주문 완료!\n\n기준가: $${currentPrice.toFixed(4)}\n범위: +${orderInterval}% ~ +${maxPercent}%\n총 투입: $${orderAmount * orderCount}`);
+                alert(`${symbol}\n\n${success}개 숏 주문 완료!\n\n기준가: $${orderBasePrice.toFixed(4)}\n범위: +${orderInterval}% ~ +${maxPercent}%\n총 투입: $${orderAmount * orderCount}`);
 
             } catch (e) {
                 log(`[오류] ${e.message}`, 'error');

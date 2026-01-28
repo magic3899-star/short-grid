@@ -419,6 +419,11 @@
             <input type="text" class="api-input" id="apiKey" placeholder="API Key">
             <input type="password" class="api-input" id="apiSecret" placeholder="API Secret">
             <button class="btn btn-primary" id="connectBtn" onclick="connectAPI()">연결</button>
+            <div style="display:flex; gap:10px; margin-top:10px;">
+                <button class="btn btn-secondary" onclick="exportData()" style="flex:1">📤 내보내기</button>
+                <button class="btn btn-secondary" onclick="document.getElementById('importFile').click()" style="flex:1">📥 가져오기</button>
+                <input type="file" id="importFile" accept=".json" onchange="importData(event)" style="display:none">
+            </div>
         </div>
 
         <!-- 연결 상태 -->
@@ -1531,6 +1536,44 @@
         function modalConfirm() {
             closeModal();
             if (modalCallback) modalCallback();
+        }
+
+        // ==================== 데이터 내보내기/가져오기 ====================
+        function exportData() {
+            const data = {
+                binance_api_key: localStorage.getItem('binance_api_key'),
+                binance_api_secret: localStorage.getItem('binance_api_secret'),
+                coin_data: localStorage.getItem('coin_data')
+            };
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'short-grid-backup.json';
+            a.click();
+            URL.revokeObjectURL(url);
+            log('설정 내보내기 완료', 'success');
+        }
+
+        function importData(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (data.binance_api_key) localStorage.setItem('binance_api_key', data.binance_api_key);
+                    if (data.binance_api_secret) localStorage.setItem('binance_api_secret', data.binance_api_secret);
+                    if (data.coin_data) localStorage.setItem('coin_data', data.coin_data);
+                    log('설정 가져오기 완료 - 새로고침 중...', 'success');
+                    setTimeout(() => location.reload(), 500);
+                } catch (err) {
+                    log('가져오기 실패: 잘못된 파일', 'error');
+                }
+            };
+            reader.readAsText(file);
+            event.target.value = '';
         }
     </script>
 </body>

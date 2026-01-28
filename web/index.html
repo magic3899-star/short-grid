@@ -419,11 +419,6 @@
             <input type="text" class="api-input" id="apiKey" placeholder="API Key">
             <input type="password" class="api-input" id="apiSecret" placeholder="API Secret">
             <button class="btn btn-primary" id="connectBtn" onclick="connectAPI()">연결</button>
-            <div style="display:flex; gap:10px; margin-top:10px;">
-                <button class="btn btn-secondary" onclick="exportData()" style="flex:1">📤 내보내기</button>
-                <button class="btn btn-secondary" onclick="document.getElementById('importFile').click()" style="flex:1">📥 가져오기</button>
-                <input type="file" id="importFile" accept=".json" onchange="importData(event)" style="display:none">
-            </div>
         </div>
 
         <!-- 연결 상태 -->
@@ -517,6 +512,13 @@
         <button class="btn btn-secondary" id="cancelBtn" onclick="confirmCancel()" disabled style="margin-top:10px">
             🗑 선택 코인 오픈오더 전체 취소
         </button>
+
+        <!-- 데이터 내보내기/가져오기 -->
+        <div style="display:flex; gap:10px; margin-top:10px;">
+            <button class="btn btn-secondary" onclick="exportData()" style="flex:1">📤 설정 내보내기</button>
+            <button class="btn btn-secondary" onclick="document.getElementById('importFile').click()" style="flex:1">📥 설정 가져오기</button>
+            <input type="file" id="importFile" accept=".json" onchange="importData(event)" style="display:none">
+        </div>
 
         <!-- 로그 -->
         <div class="card" style="margin-top:15px">

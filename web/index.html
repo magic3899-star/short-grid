@@ -463,10 +463,11 @@
             </div>
 
             <div class="setting-row">
-                <span class="setting-label">기준가</span>
+                <span class="setting-label">1차 진입</span>
                 <div class="setting-control">
-                    <input type="number" id="basePriceInput" class="price-input" placeholder="코인 선택" step="any">
-                    <button class="btn btn-secondary btn-adj" onclick="resetBasePrice()" title="현재가로 리셋">↻</button>
+                    <button class="btn btn-secondary btn-adj" onclick="adjustEntryOffset(-5)">-</button>
+                    <span class="value" id="entryOffsetValue">0% (시장가)</span>
+                    <button class="btn btn-secondary btn-adj" onclick="adjustEntryOffset(5)">+</button>
                 </div>
             </div>
 
@@ -553,7 +554,6 @@
         let prices = {};
         let bbStatus = {};  // 볼린저밴드 상단 근처 여부
         let positionSymbols = new Set();  // 포지션 보유 심볼
-        let basePrice = 0;  // 주문 기준가
 
         // 차트 관련
         let chart = null;
@@ -564,6 +564,7 @@
         let orderAmount = 100;
         let orderCount = 3;
         let orderInterval = 5;  // 가격 간격 %
+        let entryOffset = 0;    // 1차 진입 오프셋 % (0=시장가, 5=+5% 지정가)
 
         // 모달 콜백
         let modalCallback = null;
@@ -752,10 +753,6 @@
             const price = prices[coin] || 0;
             document.getElementById('selectedPrice').textContent = `$${price.toFixed(4)}`;
 
-            // 기준가 설정
-            basePrice = price;
-            document.getElementById('basePriceInput').value = price.toFixed(6);
-
             document.getElementById('orderBtn').disabled = !isConnected;
             document.getElementById('cancelBtn').disabled = !isConnected;
 
@@ -766,15 +763,6 @@
 
             // 차트 생성 및 포지션/오더 라인 표시
             await createChart(coin);
-        }
-
-        // 기준가 현재가로 리셋
-        function resetBasePrice() {
-            if (!selectedCoin) return;
-            const price = prices[selectedCoin] || 0;
-            basePrice = price;
-            document.getElementById('basePriceInput').value = price.toFixed(6);
-            log(`기준가 리셋: $${price.toFixed(4)}`, 'info');
         }
 
         function renderCoinList() {
@@ -1263,10 +1251,19 @@
             }
         }
 
+        function adjustEntryOffset(delta) {
+            const newOffset = entryOffset + delta;
+            if (newOffset >= 0 && newOffset <= 50) {
+                entryOffset = newOffset;
+                updateSettingsDisplay();
+            }
+        }
+
         function updateSettingsDisplay() {
             document.getElementById('amountValue').textContent = `$${orderAmount}`;
             document.getElementById('countValue').textContent = `${orderCount}회`;
             document.getElementById('intervalValue').textContent = `+${orderInterval}%`;
+            document.getElementById('entryOffsetValue').textContent = entryOffset === 0 ? '0% (시장가)' : `+${entryOffset}% (지정가)`;
             document.getElementById('totalAmount').textContent = `$${orderAmount * orderCount}`;
             document.getElementById('headerInfo').textContent =
                 `${orderInterval}% 간격 | ${orderCount}개 주문 | $${orderAmount}/주문 | 총 $${orderAmount * orderCount}`;
@@ -1283,21 +1280,10 @@
             btn.disabled = true;
             btn.textContent = '⏳ 주문 실행 중...';
 
-            log(`\n${'='.repeat(40)}`, 'info');
-            log(`[시작] ${symbol} 숏 그리드 주문`, 'info');
-
             try {
                 // 현재가 조회
                 await updatePrice(symbol);
                 const currentPrice = prices[symbol];
-                log(`현재가: $${currentPrice.toFixed(4)}`, 'info');
-
-                // 기준가 확인 (입력값 사용)
-                const inputPrice = parseFloat(document.getElementById('basePriceInput').value);
-                const orderBasePrice = inputPrice > 0 ? inputPrice : currentPrice;
-                if (inputPrice > 0 && inputPrice !== currentPrice) {
-                    log(`기준가: $${orderBasePrice.toFixed(4)} (수동 설정)`, 'info');
-                }
 
                 // 심볼 정보 조회
                 const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
@@ -1313,56 +1299,84 @@
 
                 // 레버리지 설정
                 await setLeverage(symbol, 2);
-                log('레버리지: 2배 격리', 'info');
 
                 // 포지션 크기 계산
                 const positionSize = orderAmount * 2;
                 let success = 0;
+                let orderLog = [];
 
-                // 1. 시장가 주문
-                log(`\n[1] 시장가 숏 진입 ($${orderAmount} 마진)`, 'info');
-                const firstQty = Math.max(roundStep(positionSize / currentPrice, quantityPrecision), minQty);
+                // 주문 시작 로그
+                const entryInfo = entryOffset === 0 ? '시장가' : `+${entryOffset}%`;
+                log(`━━ ${symbol} ━━ 현재:$${currentPrice.toFixed(4)} | ${entryInfo} | 2x격리 | $${orderAmount}x${orderCount}`, 'info');
 
-                try {
-                    await createOrder(symbol, 'SELL', 'MARKET', firstQty);
-                    log(`  #01 시장가  $${currentPrice.toFixed(4)} x ${firstQty}  ✓`, 'success');
-                    success++;
+                // 1. 첫 번째 진입 (entryOffset에 따라 시장가 또는 지정가)
+                if (entryOffset === 0) {
+                    // 시장가 진입
+                    const firstQty = Math.max(roundStep(positionSize / currentPrice, quantityPrecision), minQty);
 
-                    // TP 주문 (9% 익절)
-                    const tpPrice = roundToTick(currentPrice * 0.91, tickSize, pricePrecision);
                     try {
-                        await createOrder(symbol, 'BUY', 'LIMIT', firstQty, tpPrice);
-                        log(`  TP -9%  $${tpPrice.toFixed(4)} x ${firstQty}  ✓`, 'success');
-                    } catch (tpErr) {
-                        log(`  TP 주문 실패: ${tpErr.message}`, 'error');
+                        await createOrder(symbol, 'SELL', 'MARKET', firstQty);
+                        orderLog.push(`#01 시장가 $${currentPrice.toFixed(4)} ✓`);
+                        success++;
+
+                        // TP 주문 (9% 익절)
+                        const tpPrice = roundToTick(currentPrice * 0.91, tickSize, pricePrecision);
+                        try {
+                            await createOrder(symbol, 'BUY', 'LIMIT', firstQty, tpPrice);
+                            orderLog.push(`TP-9% $${tpPrice.toFixed(4)} ✓`);
+                        } catch (tpErr) {
+                            orderLog.push(`TP ✗`);
+                        }
+                    } catch (e) {
+                        log(`시장가 실패: ${e.message}`, 'error');
+                        throw new Error('진입 실패');
                     }
-                } catch (e) {
-                    log(`  시장가 진입 실패: ${e.message}`, 'error');
-                    throw new Error('진입 실패로 중단');
+                } else {
+                    // 지정가 진입 (+entryOffset%)
+                    const firstPrice = roundToTick(currentPrice * (1 + entryOffset / 100), tickSize, pricePrecision);
+                    const firstQty = Math.max(roundStep(positionSize / firstPrice, quantityPrecision), minQty);
+
+                    try {
+                        await createOrder(symbol, 'SELL', 'LIMIT', firstQty, firstPrice);
+                        orderLog.push(`#01 +${entryOffset}% $${firstPrice.toFixed(4)} ✓`);
+                        success++;
+
+                        // TP 주문 (9% 익절, 1차 진입가 기준)
+                        const tpPrice = roundToTick(firstPrice * 0.91, tickSize, pricePrecision);
+                        try {
+                            await createOrder(symbol, 'BUY', 'LIMIT', firstQty, tpPrice);
+                            orderLog.push(`TP-9% $${tpPrice.toFixed(4)} ✓`);
+                        } catch (tpErr) {
+                            orderLog.push(`TP ✗`);
+                        }
+                    } catch (e) {
+                        log(`지정가 실패: ${e.message}`, 'error');
+                        throw new Error('진입 실패');
+                    }
                 }
 
-                // 2. 지정가 주문 (기준가 기반)
-                const limitCount = orderCount - 1;
-                const maxPercent = limitCount * orderInterval;
-                log(`\n[2] 오픈오더 생성 (+${orderInterval}% ~ +${maxPercent}%)`, 'info');
-
+                // 2. 추가 지정가 주문 (현재가 기준 + entryOffset + interval*i)
                 for (let i = 1; i < orderCount; i++) {
-                    const orderPrice = roundToTick(orderBasePrice * (1 + (orderInterval / 100) * i), tickSize, pricePrecision);
+                    const pct = entryOffset + (orderInterval * i);
+                    const orderPrice = roundToTick(currentPrice * (1 + pct / 100), tickSize, pricePrecision);
                     const qty = Math.max(roundStep(positionSize / orderPrice, quantityPrecision), minQty);
 
                     try {
                         await createOrder(symbol, 'SELL', 'LIMIT', qty, orderPrice);
-                        log(`  #${String(i+1).padStart(2, '0')} +${i*orderInterval}%  $${orderPrice.toFixed(4)} x ${qty}  ✓`, 'success');
+                        orderLog.push(`#${String(i+1).padStart(2,'0')} +${pct}% $${orderPrice.toFixed(4)} ✓`);
                         success++;
                     } catch (e) {
-                        log(`  #${String(i+1).padStart(2, '0')} +${i*orderInterval}%  실패: ${e.message}`, 'error');
+                        orderLog.push(`#${String(i+1).padStart(2,'0')} ✗`);
                     }
                 }
 
-                log(`\n${'='.repeat(40)}`, 'info');
-                log(`[완료] ${success}/${orderCount} 주문 성공!`, 'success');
+                // 결과 로그 (한 줄)
+                log(orderLog.join(' | '), 'success');
+                log(`완료: ${success}/${orderCount} 성공`, 'success');
 
-                alert(`${symbol}\n\n${success}개 숏 주문 완료!\n\n기준가: $${orderBasePrice.toFixed(4)}\n범위: +${orderInterval}% ~ +${maxPercent}%\n총 투입: $${orderAmount * orderCount}`);
+                const maxPct = entryOffset + (orderInterval * (orderCount - 1));
+                const entryType = entryOffset === 0 ? '시장가' : `+${entryOffset}%`;
+                alert(`${symbol}\n\n${success}개 숏 주문 완료!\n\n1차: ${entryType}\n범위: +${entryOffset}% ~ +${maxPct}%\n총 투입: $${orderAmount * orderCount}`);
 
             } catch (e) {
                 log(`[오류] ${e.message}`, 'error');

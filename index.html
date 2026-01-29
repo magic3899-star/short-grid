@@ -514,10 +514,14 @@
         </button>
 
         <!-- 물타기 설정 (포지션 있을 때만 표시) -->
-        <div class="card" id="averagingCard" style="display:none; margin-top:15px; border: 1px solid #f0883e;">
-            <div class="card-title" style="color:#f0883e;">🔄 물타기 모드</div>
+        <div class="card" id="averagingCard" style="margin-top:15px; border: 1px solid #f0883e;">
+            <div class="card-title" style="color:#f0883e;">🔄 물타기 모드 <span id="avgCoinName" style="color:#58a6ff;"></span></div>
 
-            <div id="positionInfo" style="background:#21262d; padding:10px; border-radius:6px; margin-bottom:10px; font-family:Consolas,monospace; font-size:13px;">
+            <div id="noPositionMsg" style="padding:20px; text-align:center; color:#8b949e;">
+                종목을 선택하세요
+            </div>
+
+            <div id="positionInfo" style="display:none; background:#21262d; padding:10px; border-radius:6px; margin-bottom:10px; font-family:Consolas,monospace; font-size:13px;">
                 <div>현재 평단: <span id="avgEntryPrice">-</span> | 수량: <span id="avgPositionQty">-</span></div>
                 <div>손익: <span id="avgPnL">-</span></div>
                 <div style="margin-top:8px; display:flex; align-items:center; gap:8px;">
@@ -528,34 +532,36 @@
                 </div>
             </div>
 
-            <div class="setting-row">
-                <span class="setting-label">추가 숏 간격</span>
-                <div class="setting-control">
-                    <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(-1)">-</button>
-                    <span class="value" id="avgIntervalValue">+2%</span>
-                    <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(1)">+</button>
+            <div id="avgSettings" style="display:none;">
+                <div class="setting-row">
+                    <span class="setting-label">추가 숏 간격</span>
+                    <div class="setting-control">
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(-1)">-</button>
+                        <span class="value" id="avgIntervalValue">+2%</span>
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(1)">+</button>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <span class="setting-label">추가 금액</span>
+                    <div class="setting-control">
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgAmount(-100)">-</button>
+                        <span class="value" id="avgAmountValue">$500</span>
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgAmount(100)">+</button>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <span class="setting-label">익절 간격</span>
+                    <div class="setting-control">
+                        <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(-1)">-</button>
+                        <span class="value" id="avgTpIntervalValue">-2%</span>
+                        <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(1)">+</button>
+                    </div>
                 </div>
             </div>
 
-            <div class="setting-row">
-                <span class="setting-label">추가 금액</span>
-                <div class="setting-control">
-                    <button class="btn btn-secondary btn-adj" onclick="adjustAvgAmount(-100)">-</button>
-                    <span class="value" id="avgAmountValue">$500</span>
-                    <button class="btn btn-secondary btn-adj" onclick="adjustAvgAmount(100)">+</button>
-                </div>
-            </div>
-
-            <div class="setting-row">
-                <span class="setting-label">익절 간격</span>
-                <div class="setting-control">
-                    <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(-1)">-</button>
-                    <span class="value" id="avgTpIntervalValue">-2%</span>
-                    <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(1)">+</button>
-                </div>
-            </div>
-
-            <div style="display:flex; gap:10px; margin-top:15px;">
+            <div id="avgButtons" style="display:none; gap:10px; margin-top:15px;">
                 <button class="btn btn-primary" id="startAvgBtn" onclick="startAveraging()" style="flex:1;">🚀 물타기 시작</button>
                 <button class="btn btn-danger" id="stopAvgBtn" onclick="stopAveraging()" style="flex:1; display:none;">⏹ 정지</button>
                 <button class="btn btn-secondary" id="refreshAvgBtn" onclick="refreshAveragingOrders()" style="flex:1; display:none;">🔄 주문갱신</button>
@@ -701,6 +707,9 @@
             // 신규상장 스캔 (시작 시 + 10분마다)
             setTimeout(scanNewListings, 3000);
             setInterval(scanNewListings, 600000);  // 10분 = 600000ms
+
+            // 물타기 카드 초기 상태 표시
+            updateAveragingCard(null);
         });
 
         // ==================== API 연결 ====================
@@ -1754,8 +1763,32 @@
 
         // 포지션 정보 업데이트 및 물타기 카드 표시
         async function updateAveragingCard(symbol) {
-            if (!isConnected || !symbol) {
-                document.getElementById('averagingCard').style.display = 'none';
+            const noPositionMsg = document.getElementById('noPositionMsg');
+            const positionInfo = document.getElementById('positionInfo');
+            const avgCoinName = document.getElementById('avgCoinName');
+            const avgSettings = document.getElementById('avgSettings');
+            const avgButtons = document.getElementById('avgButtons');
+
+            // 종목 미선택
+            if (!symbol) {
+                avgCoinName.textContent = '';
+                noPositionMsg.textContent = '종목을 선택하세요';
+                noPositionMsg.style.display = 'block';
+                positionInfo.style.display = 'none';
+                if (avgSettings) avgSettings.style.display = 'none';
+                if (avgButtons) avgButtons.style.display = 'none';
+                return;
+            }
+
+            avgCoinName.textContent = `- ${symbol.replace('USDT', '')}`;
+
+            // 연결 안됨
+            if (!isConnected) {
+                noPositionMsg.textContent = 'API 연결 필요';
+                noPositionMsg.style.display = 'block';
+                positionInfo.style.display = 'none';
+                if (avgSettings) avgSettings.style.display = 'none';
+                if (avgButtons) avgButtons.style.display = 'none';
                 return;
             }
 
@@ -1771,7 +1804,11 @@
                 document.getElementById('avgEntryPrice').textContent = `$${entryPrice.toFixed(4)}`;
                 document.getElementById('avgPositionQty').textContent = positionAmt.toFixed(4);
                 document.getElementById('avgPnL').innerHTML = `<span style="color:${pnlColor}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>`;
-                document.getElementById('averagingCard').style.display = 'block';
+
+                noPositionMsg.style.display = 'none';
+                positionInfo.style.display = 'block';
+                if (avgSettings) avgSettings.style.display = 'block';
+                if (avgButtons) avgButtons.style.display = 'flex';
 
                 // 기준 평단 입력창 초기화 (localStorage에서 복원)
                 const savedKey = `avgStart_${symbol}`;
@@ -1785,7 +1822,11 @@
                 }
                 updateTpPreview();
             } else {
-                document.getElementById('averagingCard').style.display = 'none';
+                noPositionMsg.textContent = `${symbol.replace('USDT', '')} 포지션 없음`;
+                noPositionMsg.style.display = 'block';
+                positionInfo.style.display = 'none';
+                if (avgSettings) avgSettings.style.display = 'none';
+                if (avgButtons) avgButtons.style.display = 'none';
                 if (isAveraging) {
                     stopAveraging();
                 }

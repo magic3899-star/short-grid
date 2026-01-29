@@ -1362,10 +1362,14 @@
                     }
                 }
 
-                // 2. 추가 지정가 주문 (현재가 기준 + entryOffset + interval*i)
+                // 2. 추가 지정가 주문
+                // - 시장가(0%): 현재가 기준
+                // - 지정가(5%+): 1차 진입가 기준
+                const basePrice = entryOffset === 0 ? currentPrice : currentPrice * (1 + entryOffset / 100);
+
                 for (let i = 1; i < orderCount; i++) {
-                    const pct = entryOffset + (orderInterval * i);
-                    const orderPrice = roundToTick(currentPrice * (1 + pct / 100), tickSize, pricePrecision);
+                    const pct = orderInterval * i;
+                    const orderPrice = roundToTick(basePrice * (1 + pct / 100), tickSize, pricePrecision);
                     const qty = Math.max(roundStep(positionSize / orderPrice, quantityPrecision), minQty);
 
                     try {
@@ -1381,9 +1385,12 @@
                 log(orderLog.join(' | '), 'success');
                 log(`완료: ${success}/${orderCount} 성공`, 'success');
 
-                const maxPct = entryOffset + (orderInterval * (orderCount - 1));
+                const maxPct = orderInterval * (orderCount - 1);
                 const entryType = entryOffset === 0 ? '시장가' : `+${entryOffset}%`;
-                alert(`${symbol}\n\n${success}개 숏 주문 완료!\n\n1차: ${entryType}\n범위: +${entryOffset}% ~ +${maxPct}%\n총 투입: $${orderAmount * orderCount}`);
+                const rangeInfo = entryOffset === 0
+                    ? `현재가 기준 +${orderInterval}% ~ +${maxPct}%`
+                    : `1차 진입가 기준 +${orderInterval}% ~ +${maxPct}%`;
+                alert(`${symbol}\n\n${success}개 숏 주문 완료!\n\n1차: ${entryType}\n추가: ${rangeInfo}\n총 투입: $${orderAmount * orderCount}`);
 
             } catch (e) {
                 log(`[오류] ${e.message}`, 'error');

@@ -1877,10 +1877,7 @@
 
                 log(`강제 익절 시도: $${tpPrice.toFixed(4)} × ${tpQty}`, 'info');
 
-                // 기존 익절 주문 취소 (있으면)
-                await cancelAveragingOrders();
-
-                // 익절 주문 배치
+                // 익절 주문 배치 (기존 주문은 건드리지 않음)
                 await createOrder(symbol, 'BUY', 'LIMIT', tpQty, tpPrice);
                 log(`강제 익절 주문 완료: $${tpPrice.toFixed(4)} × ${tpQty}`, 'success');
 

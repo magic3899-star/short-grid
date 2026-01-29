@@ -526,7 +526,7 @@
                 <span class="setting-label">추가 숏 간격</span>
                 <div class="setting-control">
                     <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(-1)">-</button>
-                    <span class="value" id="avgIntervalValue">+3%</span>
+                    <span class="value" id="avgIntervalValue">+2%</span>
                     <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(1)">+</button>
                 </div>
             </div>
@@ -544,19 +544,47 @@
                 <span class="setting-label">익절 간격</span>
                 <div class="setting-control">
                     <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(-1)">-</button>
-                    <span class="value" id="avgTpIntervalValue">-3%</span>
+                    <span class="value" id="avgTpIntervalValue">-2%</span>
                     <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(1)">+</button>
                 </div>
             </div>
 
             <div style="display:flex; gap:10px; margin-top:15px;">
                 <button class="btn btn-primary" id="startAvgBtn" onclick="startAveraging()" style="flex:1;">🚀 물타기 시작</button>
-                <button class="btn btn-danger" id="stopAvgBtn" onclick="stopAveraging()" style="flex:1; display:none;">⏹ 물타기 정지</button>
+                <button class="btn btn-danger" id="stopAvgBtn" onclick="stopAveraging()" style="flex:1; display:none;">⏹ 정지</button>
+                <button class="btn btn-secondary" id="refreshAvgBtn" onclick="refreshAveragingOrders()" style="flex:1; display:none;">🔄 주문갱신</button>
             </div>
 
             <div id="avgStatus" style="margin-top:10px; padding:10px; background:#21262d; border-radius:6px; font-size:12px; display:none;">
                 <div style="color:#7ee787;">● 물타기 활성화</div>
                 <div id="avgOrderInfo" style="margin-top:5px; color:#8b949e;"></div>
+            </div>
+
+            <!-- 물타기 효과 표시 (활성화 시에만) -->
+            <div id="avgProgressCard" style="margin-top:10px; padding:10px; background:#0d1117; border:1px solid #30363d; border-radius:6px; font-size:12px; display:none;">
+                <div style="color:#8b949e; margin-bottom:8px;">📊 물타기 효과</div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <span style="color:#8b949e;">시작</span>
+                    <span id="avgStartInfo" style="color:#c9d1d9;">-</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <span style="color:#8b949e;">현재</span>
+                    <span id="avgCurrentInfo" style="color:#c9d1d9;">-</span>
+                </div>
+                <div style="border-top:1px solid #30363d; margin:8px 0; padding-top:8px;">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                        <span style="color:#8b949e;">평단 변화</span>
+                        <span id="avgEntryChange" style="font-weight:bold;">-</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                        <span style="color:#8b949e;">수량 변화</span>
+                        <span id="avgQtyChange" style="font-weight:bold;">-</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between;">
+                        <span style="color:#8b949e;">손익 변화</span>
+                        <span id="avgPnLChange" style="font-weight:bold;">-</span>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -624,12 +652,19 @@
         let modalCallback = null;
 
         // 물타기 설정
-        let avgInterval = 3;       // 추가 숏 간격 %
+        let avgInterval = 2;       // 추가 숏 간격 %
         let avgAmount = 500;       // 추가 금액 $
-        let avgTpInterval = 3;     // 익절 간격 %
+        let avgTpInterval = 2;     // 익절 간격 %
         let isAveraging = false;   // 물타기 활성화 여부
         let avgCheckInterval = null;  // 물타기 체크 인터벌
         let currentPosition = null;   // 현재 포지션 정보
+        let lastPositionQty = 0;      // 마지막 포지션 수량 (체결 감지용)
+        let lastEntryPrice = 0;       // 마지막 평단 (변경 감지용)
+
+        // 물타기 효과 추적 (시작 시점 저장)
+        let avgStartQty = 0;          // 시작 수량
+        let avgStartEntry = 0;        // 시작 평단
+        let avgStartPnL = 0;          // 시작 손익
 
         // ==================== 초기화 ====================
         document.addEventListener('DOMContentLoaded', () => {
@@ -1708,11 +1743,27 @@
             isAveraging = true;
             document.getElementById('startAvgBtn').style.display = 'none';
             document.getElementById('stopAvgBtn').style.display = 'block';
+            document.getElementById('refreshAvgBtn').style.display = 'block';
             document.getElementById('avgStatus').style.display = 'block';
+            document.getElementById('avgProgressCard').style.display = 'block';
+
+            // 현재 포지션 상태 저장 (체결 감지용)
+            lastPositionQty = Math.abs(parseFloat(currentPosition.positionAmt));
+            lastEntryPrice = parseFloat(currentPosition.entryPrice);
+
+            // 물타기 효과 추적용 시작 상태 저장
+            avgStartQty = lastPositionQty;
+            avgStartEntry = lastEntryPrice;
+            avgStartPnL = parseFloat(currentPosition.unRealizedProfit);
 
             log(`${selectedCoin} 물타기 시작 - 추가숏 +${avgInterval}%, 익절 -${avgTpInterval}%, $${avgAmount}`, 'info');
+            log(`초기 포지션: ${lastPositionQty} @ $${lastEntryPrice.toFixed(4)} (손익: ${avgStartPnL >= 0 ? '+' : ''}$${avgStartPnL.toFixed(2)})`, 'info');
 
-            // 초기 주문 배치
+            // 시작 상태 UI 표시
+            updateAvgProgress();
+
+            // 기존 주문 취소 후 초기 주문 배치
+            await cancelAveragingOrders();
             await placeAveragingOrders();
 
             // 30초마다 체크
@@ -1732,14 +1783,35 @@
                 avgCheckInterval = null;
             }
 
+            // 포지션 추적 변수 초기화
+            lastPositionQty = 0;
+            lastEntryPrice = 0;
+
+            // 물타기 효과 추적 변수 초기화
+            avgStartQty = 0;
+            avgStartEntry = 0;
+            avgStartPnL = 0;
+
             document.getElementById('startAvgBtn').style.display = 'block';
             document.getElementById('stopAvgBtn').style.display = 'none';
+            document.getElementById('refreshAvgBtn').style.display = 'none';
             document.getElementById('avgStatus').style.display = 'none';
+            document.getElementById('avgProgressCard').style.display = 'none';
 
             log(`${selectedCoin} 물타기 정지`, 'info');
         }
 
-        // 물타기 주문 배치
+        // 물타기 주문 갱신 (취소 후 재배치)
+        async function refreshAveragingOrders() {
+            if (!isAveraging || !selectedCoin) return;
+
+            log('물타기 주문 갱신 중...', 'info');
+            await cancelAveragingOrders();
+            await placeAveragingOrders();
+            log('물타기 주문 갱신 완료', 'success');
+        }
+
+        // 물타기 주문 배치 (포지션 변화 시에만 호출됨)
         async function placeAveragingOrders() {
             if (!selectedCoin || !currentPosition) return;
 
@@ -1761,69 +1833,43 @@
                 const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
 
                 // 목표 가격 계산
-                const avgPrice = roundToTick(currentPrice * (1 + avgInterval / 100), tickSize, pricePrecision);
+                // 추가 숏: max(평단+N%, 현재가+N%) - 현재가보다 항상 높게
+                const entryBasedPrice = entryPrice * (1 + avgInterval / 100);
+                const currentBasedPrice = currentPrice * (1 + avgInterval / 100);
+                const avgPrice = roundToTick(Math.max(entryBasedPrice, currentBasedPrice), tickSize, pricePrecision);
                 const avgQty = Math.max(roundStep((avgAmount * 2) / avgPrice, quantityPrecision), minQty);
-                const tpPrice = roundToTick(entryPrice * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+                // 익절: 시작 평단 -N% (물타기 시작 시점 기준)
+                const tpPrice = roundToTick(avgStartEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
 
-                // 기존 오픈오더 조회
-                const openOrders = await getOpenOrders(symbol);
+                // 보유 수량 확인
+                const positionQty = Math.abs(parseFloat(currentPosition.positionAmt));
+                // 물타기로 추가된 수량 (원금 보호)
+                const addedQty = positionQty - avgStartQty;
 
-                // 1. 추가 숏 주문 처리
-                const existingShorts = openOrders.filter(o =>
-                    o.side === 'SELL' && o.positionSide === 'SHORT' && o.type === 'LIMIT'
-                );
-
-                // 기존 숏 주문이 목표가와 다르면 취소 후 재배치
-                let needNewShort = true;
-                for (const order of existingShorts) {
-                    const orderPrice = parseFloat(order.price);
-                    if (Math.abs(orderPrice - avgPrice) / avgPrice < 0.005) {
-                        needNewShort = false;  // 이미 비슷한 가격에 있음
-                    } else if (orderPrice > currentPrice) {
-                        // 현재가 위의 다른 가격 숏 주문 → 취소
-                        await cancelOrder(symbol, order.orderId);
-                        log(`기존 숏 주문 취소: $${orderPrice.toFixed(4)}`, 'info');
-                    }
+                // 1. 추가 숏 주문 (항상 배치)
+                try {
+                    await createOrder(symbol, 'SELL', 'LIMIT', avgQty, avgPrice);
+                    log(`물타기 숏 주문: $${avgPrice.toFixed(4)} × ${avgQty}`, 'success');
+                } catch (e) {
+                    log(`물타기 숏 실패: ${e.message}`, 'error');
                 }
 
-                if (needNewShort) {
+                // 2. 익절 주문 (물타기로 추가된 수량이 있을 때만)
+                let tpQty = 0;
+                if (addedQty > minQty) {
+                    tpQty = Math.min(avgQty, addedQty);
                     try {
-                        await createOrder(symbol, 'SELL', 'LIMIT', avgQty, avgPrice);
-                        log(`물타기 숏 주문: $${avgPrice.toFixed(4)} × ${avgQty}`, 'success');
-                    } catch (e) {
-                        log(`물타기 숏 실패: ${e.message}`, 'error');
-                    }
-                }
-
-                // 2. 익절 주문 처리
-                const existingTps = openOrders.filter(o =>
-                    o.side === 'BUY' && o.positionSide === 'SHORT' && o.type === 'LIMIT'
-                );
-
-                // 기존 익절 주문이 목표가와 다르면 취소 후 재배치
-                let needNewTp = true;
-                for (const order of existingTps) {
-                    const orderPrice = parseFloat(order.price);
-                    if (Math.abs(orderPrice - tpPrice) / tpPrice < 0.005) {
-                        needNewTp = false;  // 이미 비슷한 가격에 있음
-                    } else if (orderPrice < currentPrice) {
-                        // 현재가 아래의 다른 가격 익절 주문 → 취소
-                        await cancelOrder(symbol, order.orderId);
-                        log(`기존 익절 주문 취소: $${orderPrice.toFixed(4)}`, 'info');
-                    }
-                }
-
-                if (needNewTp) {
-                    try {
-                        await createOrder(symbol, 'BUY', 'LIMIT', avgQty, tpPrice);
-                        log(`물타기 익절 주문: $${tpPrice.toFixed(4)} × ${avgQty}`, 'success');
+                        await createOrder(symbol, 'BUY', 'LIMIT', tpQty, tpPrice);
+                        log(`물타기 익절 주문: $${tpPrice.toFixed(4)} × ${tpQty}`, 'success');
                     } catch (e) {
                         log(`물타기 익절 실패: ${e.message}`, 'error');
                     }
+                } else {
+                    log(`익절 대기: 추가 숏 체결 후 익절 주문 배치`, 'info');
                 }
 
                 // 상태 업데이트
-                updateAvgOrderInfo(avgPrice, tpPrice, avgQty);
+                updateAvgOrderInfo(avgPrice, tpPrice, avgQty, tpQty);
 
             } catch (e) {
                 log(`물타기 주문 오류: ${e.message}`, 'error');
@@ -1867,8 +1913,32 @@
             // 가격 업데이트
             await updatePrice(selectedCoin);
 
-            // 주문 재배치
-            await placeAveragingOrders();
+            // 포지션 변화 감지 (주문 체결 시에만 재배치)
+            const currentQty = Math.abs(parseFloat(currentPosition.positionAmt));
+            const currentEntry = parseFloat(currentPosition.entryPrice);
+
+            const qtyChanged = lastPositionQty !== currentQty;
+            const entryChanged = Math.abs(lastEntryPrice - currentEntry) > 0.0001;
+
+            if (qtyChanged || entryChanged) {
+                // 포지션 변화 있음 = 주문 체결됨
+                const changeType = entryChanged ? '추가숏 체결' : '익절 체결';
+                log(`${changeType}: ${lastPositionQty} → ${currentQty}, 평단: $${lastEntryPrice.toFixed(4)} → $${currentEntry.toFixed(4)}`, 'info');
+
+                // 체결된 주문 보충 (숏/익절 모두 다시 배치)
+                await cancelAveragingOrders();
+                await placeAveragingOrders();
+
+                // 새 포지션 상태 저장
+                lastPositionQty = currentQty;
+                lastEntryPrice = currentEntry;
+            } else {
+                // 포지션 변화 없음 - 주문 유지, 상태만 업데이트
+                log(`물타기 대기 중... (현재가: $${prices[selectedCoin].toFixed(4)})`, 'info');
+            }
+
+            // 물타기 효과 업데이트
+            updateAvgProgress();
 
             // 차트 갱신
             if (chart && selectedCoin) {
@@ -1876,14 +1946,69 @@
             }
         }
 
+        // 물타기 관련 주문만 취소
+        async function cancelAveragingOrders() {
+            if (!selectedCoin) return;
+
+            const symbol = selectedCoin;
+            const openOrders = await getOpenOrders(symbol);
+
+            for (const order of openOrders) {
+                if (order.positionSide === 'SHORT' && order.type === 'LIMIT') {
+                    await cancelOrder(symbol, order.orderId);
+                }
+            }
+            log(`${symbol} 물타기 주문 정리`, 'info');
+        }
+
         // 물타기 주문 정보 표시
-        function updateAvgOrderInfo(shortPrice, tpPrice, qty) {
+        function updateAvgOrderInfo(shortPrice, tpPrice, shortQty, tpQty) {
             const info = document.getElementById('avgOrderInfo');
+            const tpText = tpQty > 0
+                ? `익절: $${tpPrice.toFixed(4)} × ${tpQty.toFixed(4)}`
+                : `익절: 대기 (숏 체결 후 배치)`;
             info.innerHTML = `
-                추가숏: $${shortPrice.toFixed(4)}<br>
-                익절: $${tpPrice.toFixed(4)}<br>
-                수량: ${qty.toFixed(4)}
+                추가숏: $${shortPrice.toFixed(4)} × ${shortQty.toFixed(4)}<br>
+                ${tpText}
             `;
+        }
+
+        // 물타기 효과 표시 업데이트
+        function updateAvgProgress() {
+            if (!currentPosition || !isAveraging) return;
+
+            const currentQty = Math.abs(parseFloat(currentPosition.positionAmt));
+            const currentEntry = parseFloat(currentPosition.entryPrice);
+            const currentPnL = parseFloat(currentPosition.unRealizedProfit);
+
+            // 시작 상태 표시
+            document.getElementById('avgStartInfo').textContent =
+                `$${avgStartEntry.toFixed(4)} × ${avgStartQty.toFixed(4)} (${avgStartPnL >= 0 ? '+' : ''}$${avgStartPnL.toFixed(2)})`;
+
+            // 현재 상태 표시
+            document.getElementById('avgCurrentInfo').textContent =
+                `$${currentEntry.toFixed(4)} × ${currentQty.toFixed(4)} (${currentPnL >= 0 ? '+' : ''}$${currentPnL.toFixed(2)})`;
+
+            // 평단 변화 (숏이니까 높아지면 좋음)
+            const entryChange = currentEntry - avgStartEntry;
+            const entryChangePct = (entryChange / avgStartEntry * 100).toFixed(2);
+            const entryColor = entryChange > 0 ? '#7ee787' : entryChange < 0 ? '#f85149' : '#8b949e';
+            const entrySign = entryChange > 0 ? '↑' : entryChange < 0 ? '↓' : '';
+            document.getElementById('avgEntryChange').innerHTML =
+                `<span style="color:${entryColor}">${entrySign} ${entryChange >= 0 ? '+' : ''}$${entryChange.toFixed(4)} (${entryChangePct}%)</span>`;
+
+            // 수량 변화 (줄어들면 익절됨)
+            const qtyChange = currentQty - avgStartQty;
+            const qtyColor = qtyChange < 0 ? '#7ee787' : qtyChange > 0 ? '#f0883e' : '#8b949e';
+            const qtySign = qtyChange > 0 ? '+' : '';
+            document.getElementById('avgQtyChange').innerHTML =
+                `<span style="color:${qtyColor}">${qtySign}${qtyChange.toFixed(4)}</span>`;
+
+            // 손익 변화
+            const pnlChange = currentPnL - avgStartPnL;
+            const pnlColor = pnlChange > 0 ? '#7ee787' : pnlChange < 0 ? '#f85149' : '#8b949e';
+            document.getElementById('avgPnLChange').innerHTML =
+                `<span style="color:${pnlColor}">${pnlChange >= 0 ? '+' : ''}$${pnlChange.toFixed(2)}</span>`;
         }
     </script>
 </body>

@@ -514,42 +514,54 @@
         </button>
 
         <!-- 물타기 설정 (포지션 있을 때만 표시) -->
-        <div class="card" id="averagingCard" style="display:none; margin-top:15px; border: 1px solid #f0883e;">
-            <div class="card-title" style="color:#f0883e;">🔄 물타기 모드</div>
+        <div class="card" id="averagingCard" style="margin-top:15px; border: 1px solid #f0883e;">
+            <div class="card-title" style="color:#f0883e;">🔄 물타기 모드 <span id="avgCoinName" style="color:#58a6ff;"></span></div>
 
-            <div id="positionInfo" style="background:#21262d; padding:10px; border-radius:6px; margin-bottom:10px; font-family:Consolas,monospace; font-size:13px;">
-                <div>진입가: <span id="avgEntryPrice">-</span> | 수량: <span id="avgPositionQty">-</span></div>
+            <div id="noPositionMsg" style="padding:20px; text-align:center; color:#8b949e;">
+                종목을 선택하세요
+            </div>
+
+            <div id="positionInfo" style="display:none; background:#21262d; padding:10px; border-radius:6px; margin-bottom:10px; font-family:Consolas,monospace; font-size:13px;">
+                <div>현재 평단: <span id="avgEntryPrice">-</span> | 수량: <span id="avgPositionQty">-</span></div>
                 <div>손익: <span id="avgPnL">-</span></div>
-            </div>
-
-            <div class="setting-row">
-                <span class="setting-label">추가 숏 간격</span>
-                <div class="setting-control">
-                    <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(-1)">-</button>
-                    <span class="value" id="avgIntervalValue">+2%</span>
-                    <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(1)">+</button>
+                <div style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+                    <span style="color:#f0883e;">기준 평단:</span>
+                    <input type="text" id="baseEntryInput" class="price-input" style="width:100px; font-size:12px;" placeholder="원래 진입가">
+                    <button class="btn btn-secondary" onclick="setBaseEntry()" style="padding:4px 8px; font-size:11px;">설정</button>
+                    <span id="tpPreview" style="color:#7ee787; font-size:11px;">익절가: -</span>
                 </div>
             </div>
 
-            <div class="setting-row">
-                <span class="setting-label">추가 금액</span>
-                <div class="setting-control">
-                    <button class="btn btn-secondary btn-adj" onclick="adjustAvgAmount(-100)">-</button>
-                    <span class="value" id="avgAmountValue">$500</span>
-                    <button class="btn btn-secondary btn-adj" onclick="adjustAvgAmount(100)">+</button>
+            <div id="avgSettings" style="display:none;">
+                <div class="setting-row">
+                    <span class="setting-label">추가 숏 간격</span>
+                    <div class="setting-control">
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(-1)">-</button>
+                        <span class="value" id="avgIntervalValue">+2%</span>
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(1)">+</button>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <span class="setting-label">추가 금액</span>
+                    <div class="setting-control">
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgAmount(-100)">-</button>
+                        <span class="value" id="avgAmountValue">$500</span>
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgAmount(100)">+</button>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <span class="setting-label">익절 간격</span>
+                    <div class="setting-control">
+                        <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(-1)">-</button>
+                        <span class="value" id="avgTpIntervalValue">-2%</span>
+                        <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(1)">+</button>
+                    </div>
                 </div>
             </div>
 
-            <div class="setting-row">
-                <span class="setting-label">익절 간격</span>
-                <div class="setting-control">
-                    <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(-1)">-</button>
-                    <span class="value" id="avgTpIntervalValue">-2%</span>
-                    <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(1)">+</button>
-                </div>
-            </div>
-
-            <div style="display:flex; gap:10px; margin-top:15px;">
+            <div id="avgButtons" style="display:none; gap:10px; margin-top:15px;">
                 <button class="btn btn-primary" id="startAvgBtn" onclick="startAveraging()" style="flex:1;">🚀 물타기 시작</button>
                 <button class="btn btn-danger" id="stopAvgBtn" onclick="stopAveraging()" style="flex:1; display:none;">⏹ 정지</button>
                 <button class="btn btn-secondary" id="refreshAvgBtn" onclick="refreshAveragingOrders()" style="flex:1; display:none;">🔄 주문갱신</button>
@@ -695,6 +707,9 @@
             // 신규상장 스캔 (시작 시 + 10분마다)
             setTimeout(scanNewListings, 3000);
             setInterval(scanNewListings, 600000);  // 10분 = 600000ms
+
+            // 물타기 카드 초기 상태 표시
+            updateAveragingCard(null);
         });
 
         // ==================== API 연결 ====================
@@ -1703,13 +1718,77 @@
             if (newVal >= 1 && newVal <= 20) {
                 avgTpInterval = newVal;
                 document.getElementById('avgTpIntervalValue').textContent = `-${avgTpInterval}%`;
+                updateTpPreview();
+            }
+        }
+
+        // 기준 평단 수동 설정
+        function setBaseEntry() {
+            const input = document.getElementById('baseEntryInput').value.trim();
+            const price = parseFloat(input);
+            if (isNaN(price) || price <= 0) {
+                log('유효한 가격을 입력하세요', 'error');
+                return;
+            }
+            avgStartEntry = price;
+            // localStorage에도 저장
+            if (selectedCoin) {
+                const savedKey = `avgStart_${selectedCoin}`;
+                localStorage.setItem(savedKey, JSON.stringify({
+                    qty: avgStartQty || Math.abs(parseFloat(currentPosition?.positionAmt || 0)),
+                    entry: avgStartEntry,
+                    pnl: avgStartPnL || 0
+                }));
+            }
+            log(`기준 평단 설정: $${avgStartEntry.toFixed(4)} → 익절가: $${(avgStartEntry * (1 - avgTpInterval/100)).toFixed(4)}`, 'success');
+            updateTpPreview();
+        }
+
+        // 익절가 미리보기 업데이트
+        function updateTpPreview() {
+            const input = document.getElementById('baseEntryInput');
+            const preview = document.getElementById('tpPreview');
+            if (!input || !preview) return;
+
+            const basePrice = parseFloat(input.value) || avgStartEntry;
+            if (basePrice > 0) {
+                const tpPrice = basePrice * (1 - avgTpInterval / 100);
+                preview.textContent = `익절가: $${tpPrice.toFixed(4)}`;
+                preview.style.color = '#7ee787';
+            } else {
+                preview.textContent = '익절가: -';
+                preview.style.color = '#8b949e';
             }
         }
 
         // 포지션 정보 업데이트 및 물타기 카드 표시
         async function updateAveragingCard(symbol) {
-            if (!isConnected || !symbol) {
-                document.getElementById('averagingCard').style.display = 'none';
+            const noPositionMsg = document.getElementById('noPositionMsg');
+            const positionInfo = document.getElementById('positionInfo');
+            const avgCoinName = document.getElementById('avgCoinName');
+            const avgSettings = document.getElementById('avgSettings');
+            const avgButtons = document.getElementById('avgButtons');
+
+            // 종목 미선택
+            if (!symbol) {
+                avgCoinName.textContent = '';
+                noPositionMsg.textContent = '종목을 선택하세요';
+                noPositionMsg.style.display = 'block';
+                positionInfo.style.display = 'none';
+                if (avgSettings) avgSettings.style.display = 'none';
+                if (avgButtons) avgButtons.style.display = 'none';
+                return;
+            }
+
+            avgCoinName.textContent = `- ${symbol.replace('USDT', '')}`;
+
+            // 연결 안됨
+            if (!isConnected) {
+                noPositionMsg.textContent = 'API 연결 필요';
+                noPositionMsg.style.display = 'block';
+                positionInfo.style.display = 'none';
+                if (avgSettings) avgSettings.style.display = 'none';
+                if (avgButtons) avgButtons.style.display = 'none';
                 return;
             }
 
@@ -1725,9 +1804,29 @@
                 document.getElementById('avgEntryPrice').textContent = `$${entryPrice.toFixed(4)}`;
                 document.getElementById('avgPositionQty').textContent = positionAmt.toFixed(4);
                 document.getElementById('avgPnL').innerHTML = `<span style="color:${pnlColor}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>`;
-                document.getElementById('averagingCard').style.display = 'block';
+
+                noPositionMsg.style.display = 'none';
+                positionInfo.style.display = 'block';
+                if (avgSettings) avgSettings.style.display = 'block';
+                if (avgButtons) avgButtons.style.display = 'flex';
+
+                // 기준 평단 입력창 초기화 (localStorage에서 복원)
+                const savedKey = `avgStart_${symbol}`;
+                const saved = localStorage.getItem(savedKey);
+                const baseInput = document.getElementById('baseEntryInput');
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    baseInput.value = data.entry.toFixed(4);
+                } else {
+                    baseInput.value = entryPrice.toFixed(4);
+                }
+                updateTpPreview();
             } else {
-                document.getElementById('averagingCard').style.display = 'none';
+                noPositionMsg.textContent = `${symbol.replace('USDT', '')} 포지션 없음`;
+                noPositionMsg.style.display = 'block';
+                positionInfo.style.display = 'none';
+                if (avgSettings) avgSettings.style.display = 'none';
+                if (avgButtons) avgButtons.style.display = 'none';
                 if (isAveraging) {
                     stopAveraging();
                 }
@@ -1753,27 +1852,22 @@
             lastPositionQty = Math.abs(parseFloat(currentPosition.positionAmt));
             lastEntryPrice = parseFloat(currentPosition.entryPrice);
 
-            // 물타기 효과 추적용 시작 상태 저장 (localStorage에서 복원 시도)
+            // 물타기 효과 추적용 시작 상태 저장
+            avgStartQty = lastPositionQty;
+            avgStartPnL = parseFloat(currentPosition.unRealizedProfit);
+
+            // 기준가 = 현재 시장가 (NOT 포지션 평단)
+            const currentPrice = prices[selectedCoin];
+            avgStartEntry = currentPrice;
+
+            // localStorage에 저장
             const savedKey = `avgStart_${selectedCoin}`;
-            const saved = localStorage.getItem(savedKey);
-            if (saved) {
-                const data = JSON.parse(saved);
-                avgStartQty = data.qty;
-                avgStartEntry = data.entry;
-                avgStartPnL = data.pnl;
-                log(`저장된 시작 상태 복원: ${avgStartQty} @ $${avgStartEntry.toFixed(4)}`, 'info');
-            } else {
-                avgStartQty = lastPositionQty;
-                avgStartEntry = lastEntryPrice;
-                avgStartPnL = parseFloat(currentPosition.unRealizedProfit);
-                // 저장
-                localStorage.setItem(savedKey, JSON.stringify({
-                    qty: avgStartQty, entry: avgStartEntry, pnl: avgStartPnL
-                }));
-            }
+            localStorage.setItem(savedKey, JSON.stringify({
+                qty: avgStartQty, entry: avgStartEntry, pnl: avgStartPnL
+            }));
 
             log(`${selectedCoin} 물타기 시작 - 추가숏 +${avgInterval}%, 익절 -${avgTpInterval}%, $${avgAmount}`, 'info');
-            log(`시작 평단: $${avgStartEntry.toFixed(4)} | 익절가: $${(avgStartEntry * (1 - avgTpInterval/100)).toFixed(4)}`, 'info');
+            log(`기준가(현재가): $${avgStartEntry.toFixed(4)} | 숏: $${(avgStartEntry * (1 + avgInterval/100)).toFixed(4)} | 익절: $${(avgStartEntry * (1 - avgTpInterval/100)).toFixed(4)}`, 'info');
 
             // 시작 상태 UI 표시
             updateAvgProgress();
@@ -1856,22 +1950,23 @@
                 const tickSize = parseFloat(symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER').tickSize);
                 const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
 
-                // avgStartEntry 복원 시도
-                if (avgStartEntry === 0) {
+                // 기준가: 입력값 우선, 없으면 avgStartEntry 사용
+                const baseInput = document.getElementById('baseEntryInput');
+                let baseEntry = parseFloat(baseInput?.value) || avgStartEntry;
+                if (baseEntry === 0) {
                     const savedKey = `avgStart_${symbol}`;
                     const saved = localStorage.getItem(savedKey);
                     if (saved) {
-                        const data = JSON.parse(saved);
-                        avgStartEntry = data.entry;
-                        log(`시작 평단 복원: $${avgStartEntry.toFixed(4)}`, 'info');
+                        baseEntry = JSON.parse(saved).entry;
                     } else {
-                        log('시작 평단 없음, 현재가 기준 익절', 'warning');
-                        avgStartEntry = currentPrice;
+                        log('기준가 없음, 현재 평단 사용', 'warning');
+                        baseEntry = parseFloat(currentPosition.entryPrice);
                     }
                 }
 
-                // 익절가: 시작 평단 -2%
-                const tpPrice = roundToTick(avgStartEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+                // 익절가: 기준가 -N%
+                const tpPrice = roundToTick(baseEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+                log(`기준가: $${baseEntry.toFixed(4)} → 익절가: $${tpPrice.toFixed(4)} (-${avgTpInterval}%)`, 'info');
                 // 익절 수량: $500 기준 (avgAmount 사용)
                 const tpQty = Math.max(roundStep((avgAmount * 2) / tpPrice, quantityPrecision), minQty);
 
@@ -1925,21 +2020,21 @@
                 const tickSize = parseFloat(symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER').tickSize);
                 const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
 
-                // 목표 가격 계산
-                // 추가 숏: max(평단+N%, 현재가+N%) - 현재가보다 항상 높게
-                const entryBasedPrice = entryPrice * (1 + avgInterval / 100);
-                const currentBasedPrice = currentPrice * (1 + avgInterval / 100);
-                const avgPrice = roundToTick(Math.max(entryBasedPrice, currentBasedPrice), tickSize, pricePrecision);
+                // 목표 가격 계산 (기준가 = 시작 시 현재가)
+                // 추가 숏: 기준가 + N%
+                const avgPrice = roundToTick(avgStartEntry * (1 + avgInterval / 100), tickSize, pricePrecision);
                 const avgQty = Math.max(roundStep((avgAmount * 2) / avgPrice, quantityPrecision), minQty);
-                // 익절: 시작 평단 -N% (물타기 시작 시점 기준)
+                // 익절: 기준가 - N%
                 const tpPrice = roundToTick(avgStartEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+
+                log(`기준가: $${avgStartEntry.toFixed(4)} | 추가숏: $${avgPrice.toFixed(4)} (+${avgInterval}%) | 익절: $${tpPrice.toFixed(4)} (-${avgTpInterval}%)`, 'info');
 
                 // 보유 수량 확인
                 const positionQty = Math.abs(parseFloat(currentPosition.positionAmt));
                 // 물타기로 추가된 수량 (원금 보호)
                 const addedQty = positionQty - avgStartQty;
 
-                // 1. 추가 숏 주문 (항상 배치)
+                // 1. 추가 숏 주문 (기준가 +N% 지점) - 즉시 배치
                 try {
                     await createOrder(symbol, 'SELL', 'LIMIT', avgQty, avgPrice);
                     log(`물타기 숏 주문: $${avgPrice.toFixed(4)} × ${avgQty}`, 'success');
@@ -2015,8 +2110,24 @@
 
             if (qtyChanged || entryChanged) {
                 // 포지션 변화 있음 = 주문 체결됨
-                const changeType = entryChanged ? '추가숏 체결' : '익절 체결';
+                const isAddShort = currentQty > lastPositionQty; // 수량 증가 = 추가숏
+                const isTpFill = currentQty < lastPositionQty;   // 수량 감소 = 익절
+                const changeType = isAddShort ? '추가숏 체결' : '익절 체결';
                 log(`${changeType}: ${lastPositionQty} → ${currentQty}, 평단: $${lastEntryPrice.toFixed(4)} → $${currentEntry.toFixed(4)}`, 'info');
+
+                // 익절 체결 시 → 새 현재가로 기준가 갱신 (다음 사이클 시작)
+                if (isTpFill) {
+                    const newRefPrice = prices[selectedCoin];
+                    avgStartEntry = newRefPrice;
+                    avgStartQty = currentQty; // 현재 수량을 새 기준으로
+                    log(`새 사이클: 기준가 갱신 → $${newRefPrice.toFixed(4)}`, 'info');
+
+                    // localStorage 업데이트
+                    const savedKey = `avgStart_${selectedCoin}`;
+                    localStorage.setItem(savedKey, JSON.stringify({
+                        qty: avgStartQty, entry: avgStartEntry, pnl: parseFloat(currentPosition.unRealizedProfit)
+                    }));
+                }
 
                 // 체결된 주문 보충 (숏/익절 모두 다시 배치)
                 await cancelAveragingOrders();

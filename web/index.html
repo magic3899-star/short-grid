@@ -518,8 +518,14 @@
             <div class="card-title" style="color:#f0883e;">🔄 물타기 모드</div>
 
             <div id="positionInfo" style="background:#21262d; padding:10px; border-radius:6px; margin-bottom:10px; font-family:Consolas,monospace; font-size:13px;">
-                <div>진입가: <span id="avgEntryPrice">-</span> | 수량: <span id="avgPositionQty">-</span></div>
+                <div>현재 평단: <span id="avgEntryPrice">-</span> | 수량: <span id="avgPositionQty">-</span></div>
                 <div>손익: <span id="avgPnL">-</span></div>
+                <div style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+                    <span style="color:#f0883e;">기준 평단:</span>
+                    <input type="text" id="baseEntryInput" class="price-input" style="width:100px; font-size:12px;" placeholder="원래 진입가">
+                    <button class="btn btn-secondary" onclick="setBaseEntry()" style="padding:4px 8px; font-size:11px;">설정</button>
+                    <span id="tpPreview" style="color:#7ee787; font-size:11px;">익절가: -</span>
+                </div>
             </div>
 
             <div class="setting-row">
@@ -1703,6 +1709,46 @@
             if (newVal >= 1 && newVal <= 20) {
                 avgTpInterval = newVal;
                 document.getElementById('avgTpIntervalValue').textContent = `-${avgTpInterval}%`;
+                updateTpPreview();
+            }
+        }
+
+        // 기준 평단 수동 설정
+        function setBaseEntry() {
+            const input = document.getElementById('baseEntryInput').value.trim();
+            const price = parseFloat(input);
+            if (isNaN(price) || price <= 0) {
+                log('유효한 가격을 입력하세요', 'error');
+                return;
+            }
+            avgStartEntry = price;
+            // localStorage에도 저장
+            if (selectedCoin) {
+                const savedKey = `avgStart_${selectedCoin}`;
+                localStorage.setItem(savedKey, JSON.stringify({
+                    qty: avgStartQty || Math.abs(parseFloat(currentPosition?.positionAmt || 0)),
+                    entry: avgStartEntry,
+                    pnl: avgStartPnL || 0
+                }));
+            }
+            log(`기준 평단 설정: $${avgStartEntry.toFixed(4)} → 익절가: $${(avgStartEntry * (1 - avgTpInterval/100)).toFixed(4)}`, 'success');
+            updateTpPreview();
+        }
+
+        // 익절가 미리보기 업데이트
+        function updateTpPreview() {
+            const input = document.getElementById('baseEntryInput');
+            const preview = document.getElementById('tpPreview');
+            if (!input || !preview) return;
+
+            const basePrice = parseFloat(input.value) || avgStartEntry;
+            if (basePrice > 0) {
+                const tpPrice = basePrice * (1 - avgTpInterval / 100);
+                preview.textContent = `익절가: $${tpPrice.toFixed(4)}`;
+                preview.style.color = '#7ee787';
+            } else {
+                preview.textContent = '익절가: -';
+                preview.style.color = '#8b949e';
             }
         }
 
@@ -1726,6 +1772,18 @@
                 document.getElementById('avgPositionQty').textContent = positionAmt.toFixed(4);
                 document.getElementById('avgPnL').innerHTML = `<span style="color:${pnlColor}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>`;
                 document.getElementById('averagingCard').style.display = 'block';
+
+                // 기준 평단 입력창 초기화 (localStorage에서 복원)
+                const savedKey = `avgStart_${symbol}`;
+                const saved = localStorage.getItem(savedKey);
+                const baseInput = document.getElementById('baseEntryInput');
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    baseInput.value = data.entry.toFixed(4);
+                } else {
+                    baseInput.value = entryPrice.toFixed(4);
+                }
+                updateTpPreview();
             } else {
                 document.getElementById('averagingCard').style.display = 'none';
                 if (isAveraging) {
@@ -1856,22 +1914,23 @@
                 const tickSize = parseFloat(symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER').tickSize);
                 const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
 
-                // avgStartEntry 복원 시도
-                if (avgStartEntry === 0) {
+                // 기준가: 입력값 우선, 없으면 avgStartEntry 사용
+                const baseInput = document.getElementById('baseEntryInput');
+                let baseEntry = parseFloat(baseInput?.value) || avgStartEntry;
+                if (baseEntry === 0) {
                     const savedKey = `avgStart_${symbol}`;
                     const saved = localStorage.getItem(savedKey);
                     if (saved) {
-                        const data = JSON.parse(saved);
-                        avgStartEntry = data.entry;
-                        log(`시작 평단 복원: $${avgStartEntry.toFixed(4)}`, 'info');
+                        baseEntry = JSON.parse(saved).entry;
                     } else {
-                        log('시작 평단 없음, 현재가 기준 익절', 'warning');
-                        avgStartEntry = currentPrice;
+                        log('기준가 없음, 현재 평단 사용', 'warning');
+                        baseEntry = parseFloat(currentPosition.entryPrice);
                     }
                 }
 
-                // 익절가: 시작 평단 -2%
-                const tpPrice = roundToTick(avgStartEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+                // 익절가: 기준가 -N%
+                const tpPrice = roundToTick(baseEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+                log(`기준가: $${baseEntry.toFixed(4)} → 익절가: $${tpPrice.toFixed(4)} (-${avgTpInterval}%)`, 'info');
                 // 익절 수량: $500 기준 (avgAmount 사용)
                 const tpQty = Math.max(roundStep((avgAmount * 2) / tpPrice, quantityPrecision), minQty);
 
@@ -1925,26 +1984,31 @@
                 const tickSize = parseFloat(symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER').tickSize);
                 const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
 
-                // 목표 가격 계산
-                // 추가 숏: max(평단+N%, 현재가+N%) - 현재가보다 항상 높게
-                const entryBasedPrice = entryPrice * (1 + avgInterval / 100);
-                const currentBasedPrice = currentPrice * (1 + avgInterval / 100);
-                const avgPrice = roundToTick(Math.max(entryBasedPrice, currentBasedPrice), tickSize, pricePrecision);
+                // 목표 가격 계산 (기준가 기준)
+                // 추가 숏: 기준가 + N%
+                const avgPrice = roundToTick(avgStartEntry * (1 + avgInterval / 100), tickSize, pricePrecision);
                 const avgQty = Math.max(roundStep((avgAmount * 2) / avgPrice, quantityPrecision), minQty);
-                // 익절: 시작 평단 -N% (물타기 시작 시점 기준)
+                // 익절: 기준가 - N%
                 const tpPrice = roundToTick(avgStartEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+
+                log(`기준가: $${avgStartEntry.toFixed(4)} | 추가숏: $${avgPrice.toFixed(4)} (+${avgInterval}%) | 익절: $${tpPrice.toFixed(4)} (-${avgTpInterval}%)`, 'info');
 
                 // 보유 수량 확인
                 const positionQty = Math.abs(parseFloat(currentPosition.positionAmt));
                 // 물타기로 추가된 수량 (원금 보호)
                 const addedQty = positionQty - avgStartQty;
 
-                // 1. 추가 숏 주문 (항상 배치)
-                try {
-                    await createOrder(symbol, 'SELL', 'LIMIT', avgQty, avgPrice);
-                    log(`물타기 숏 주문: $${avgPrice.toFixed(4)} × ${avgQty}`, 'success');
-                } catch (e) {
-                    log(`물타기 숏 실패: ${e.message}`, 'error');
+                // 1. 추가 숏 주문 (기준가 +N% 지점)
+                if (avgPrice <= currentPrice) {
+                    // 추가 숏 가격이 현재가보다 낮으면 즉시 체결됨 → 주문 스킵
+                    log(`추가숏 스킵: $${avgPrice.toFixed(4)} < 현재가 $${currentPrice.toFixed(4)} (이미 체결 가격 도달)`, 'warning');
+                } else {
+                    try {
+                        await createOrder(symbol, 'SELL', 'LIMIT', avgQty, avgPrice);
+                        log(`물타기 숏 주문: $${avgPrice.toFixed(4)} × ${avgQty}`, 'success');
+                    } catch (e) {
+                        log(`물타기 숏 실패: ${e.message}`, 'error');
+                    }
                 }
 
                 // 2. 익절 주문 (물타기로 추가된 수량이 있을 때만)

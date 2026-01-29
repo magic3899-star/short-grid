@@ -635,6 +635,26 @@
         let apiSecret = localStorage.getItem('binance_api_secret') || '';
         let isConnected = false;
 
+        // 서버 시간 오프셋 (PC시간 - 서버시간)
+        let serverTimeOffset = 0;
+
+        // 서버 시간 기반 타임스탬프 가져오기
+        function getServerTimestamp() {
+            return Date.now() - serverTimeOffset;
+        }
+
+        // 서버 시간 동기화
+        async function syncServerTime() {
+            try {
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/time`);
+                const data = await res.json();
+                serverTimeOffset = Date.now() - data.serverTime;
+                console.log('서버 시간 동기화 완료, 오프셋:', serverTimeOffset, 'ms');
+            } catch (e) {
+                console.error('서버 시간 동기화 실패:', e);
+            }
+        }
+
         // 워치리스트 설정
         const MAX_WATCHLIST = 50;
         const MAX_LISTING_DAYS = 90;
@@ -680,7 +700,10 @@
         let avgStartPnL = 0;          // 시작 손익
 
         // ==================== 초기화 ====================
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
+            // 서버 시간 동기화 먼저 실행
+            await syncServerTime();
+
             // 저장된 API 키 로드
             if (apiKey) {
                 document.getElementById('apiKey').value = apiKey;
@@ -699,6 +722,9 @@
             if (apiKey && apiSecret) {
                 connectAPI();
             }
+
+            // 서버 시간 주기적 동기화 (5분마다)
+            setInterval(syncServerTime, 300000);
 
             // 볼린저밴드 체크 (시작 시 + 1분마다)
             setTimeout(checkAllBollingerBands, 2000);
@@ -735,7 +761,7 @@
                 if (!ping.ok) throw new Error('Ping 실패');
 
                 // 계정 정보 확인 (서명 필요)
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
@@ -1016,7 +1042,7 @@
         async function updatePositionSymbols() {
             if (!isConnected) return;
             try {
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `recvWindow=60000&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
                 const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v2/positionRisk?${params}&signature=${signature}`, {
@@ -1133,7 +1159,7 @@
         // ==================== 포지션/오더 표시 ====================
         async function getPosition(symbol) {
             try {
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
@@ -1155,7 +1181,7 @@
 
         async function getOpenOrders(symbol) {
             try {
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
@@ -1511,7 +1537,7 @@
         }
 
         async function setLeverage(symbol, leverage) {
-            const timestamp = Date.now();
+            const timestamp = getServerTimestamp();
 
             // 1. 마진 타입을 격리(ISOLATED)로 설정
             try {
@@ -1555,7 +1581,7 @@
         }
 
         async function createOrder(symbol, side, type, quantity, price = null) {
-            const timestamp = Date.now();
+            const timestamp = getServerTimestamp();
             let params = `symbol=${symbol}&side=${side}&type=${type}&quantity=${quantity}&positionSide=SHORT&recvWindow=60000&timestamp=${timestamp}`;
 
             if (type === 'LIMIT') {
@@ -1599,7 +1625,7 @@
             log(`${symbol} 오픈오더 취소 중...`, 'info');
 
             try {
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `symbol=${symbol}&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
@@ -2136,7 +2162,7 @@
         // 개별 주문 취소
         async function cancelOrder(symbol, orderId) {
             try {
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `symbol=${symbol}&orderId=${orderId}&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 

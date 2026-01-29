@@ -1760,20 +1760,33 @@
                 const tickSize = parseFloat(symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER').tickSize);
                 const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
 
+                // 목표 가격 계산
+                const avgPrice = roundToTick(currentPrice * (1 + avgInterval / 100), tickSize, pricePrecision);
+                const avgQty = Math.max(roundStep((avgAmount * 2) / avgPrice, quantityPrecision), minQty);
+                const tpPrice = roundToTick(entryPrice * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+
                 // 기존 오픈오더 조회
                 const openOrders = await getOpenOrders(symbol);
 
-                // 1. 추가 숏 주문 (현재가 +avgInterval% 위에)
-                const avgPrice = roundToTick(currentPrice * (1 + avgInterval / 100), tickSize, pricePrecision);
-                const avgQty = Math.max(roundStep((avgAmount * 2) / avgPrice, quantityPrecision), minQty);
-
-                // 이미 비슷한 가격에 숏 주문 있는지 확인
-                const existingShort = openOrders.find(o =>
-                    o.side === 'SELL' && o.positionSide === 'SHORT' &&
-                    Math.abs(parseFloat(o.price) - avgPrice) / avgPrice < 0.005
+                // 1. 추가 숏 주문 처리
+                const existingShorts = openOrders.filter(o =>
+                    o.side === 'SELL' && o.positionSide === 'SHORT' && o.type === 'LIMIT'
                 );
 
-                if (!existingShort) {
+                // 기존 숏 주문이 목표가와 다르면 취소 후 재배치
+                let needNewShort = true;
+                for (const order of existingShorts) {
+                    const orderPrice = parseFloat(order.price);
+                    if (Math.abs(orderPrice - avgPrice) / avgPrice < 0.005) {
+                        needNewShort = false;  // 이미 비슷한 가격에 있음
+                    } else if (orderPrice > currentPrice) {
+                        // 현재가 위의 다른 가격 숏 주문 → 취소
+                        await cancelOrder(symbol, order.orderId);
+                        log(`기존 숏 주문 취소: $${orderPrice.toFixed(4)}`, 'info');
+                    }
+                }
+
+                if (needNewShort) {
                     try {
                         await createOrder(symbol, 'SELL', 'LIMIT', avgQty, avgPrice);
                         log(`물타기 숏 주문: $${avgPrice.toFixed(4)} × ${avgQty}`, 'success');
@@ -1782,16 +1795,25 @@
                     }
                 }
 
-                // 2. 익절 주문 (평단 -avgTpInterval% 아래에)
-                const tpPrice = roundToTick(entryPrice * (1 - avgTpInterval / 100), tickSize, pricePrecision);
-
-                // 이미 비슷한 가격에 익절 주문 있는지 확인
-                const existingTp = openOrders.find(o =>
-                    o.side === 'BUY' && o.positionSide === 'SHORT' &&
-                    Math.abs(parseFloat(o.price) - tpPrice) / tpPrice < 0.005
+                // 2. 익절 주문 처리
+                const existingTps = openOrders.filter(o =>
+                    o.side === 'BUY' && o.positionSide === 'SHORT' && o.type === 'LIMIT'
                 );
 
-                if (!existingTp) {
+                // 기존 익절 주문이 목표가와 다르면 취소 후 재배치
+                let needNewTp = true;
+                for (const order of existingTps) {
+                    const orderPrice = parseFloat(order.price);
+                    if (Math.abs(orderPrice - tpPrice) / tpPrice < 0.005) {
+                        needNewTp = false;  // 이미 비슷한 가격에 있음
+                    } else if (orderPrice < currentPrice) {
+                        // 현재가 아래의 다른 가격 익절 주문 → 취소
+                        await cancelOrder(symbol, order.orderId);
+                        log(`기존 익절 주문 취소: $${orderPrice.toFixed(4)}`, 'info');
+                    }
+                }
+
+                if (needNewTp) {
                     try {
                         await createOrder(symbol, 'BUY', 'LIMIT', avgQty, tpPrice);
                         log(`물타기 익절 주문: $${tpPrice.toFixed(4)} × ${avgQty}`, 'success');
@@ -1805,6 +1827,27 @@
 
             } catch (e) {
                 log(`물타기 주문 오류: ${e.message}`, 'error');
+            }
+        }
+
+        // 개별 주문 취소
+        async function cancelOrder(symbol, orderId) {
+            try {
+                const timestamp = Date.now();
+                const params = `symbol=${symbol}&orderId=${orderId}&timestamp=${timestamp}`;
+                const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
+
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/order?${params}&signature=${signature}`, {
+                    method: 'DELETE',
+                    headers: { 'X-MBX-APIKEY': apiKey }
+                });
+
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.msg || '취소 실패');
+                }
+            } catch (e) {
+                console.error('주문 취소 실패:', e);
             }
         }
 

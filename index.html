@@ -553,6 +553,7 @@
                 <button class="btn btn-primary" id="startAvgBtn" onclick="startAveraging()" style="flex:1;">🚀 물타기 시작</button>
                 <button class="btn btn-danger" id="stopAvgBtn" onclick="stopAveraging()" style="flex:1; display:none;">⏹ 정지</button>
                 <button class="btn btn-secondary" id="refreshAvgBtn" onclick="refreshAveragingOrders()" style="flex:1; display:none;">🔄 주문갱신</button>
+                <button class="btn btn-secondary" id="forceTpBtn" onclick="forcePlaceTpOrder()" style="flex:1; display:none; background:#238636;">💰 강제익절</button>
             </div>
 
             <div id="avgStatus" style="margin-top:10px; padding:10px; background:#21262d; border-radius:6px; font-size:12px; display:none;">
@@ -1744,6 +1745,7 @@
             document.getElementById('startAvgBtn').style.display = 'none';
             document.getElementById('stopAvgBtn').style.display = 'block';
             document.getElementById('refreshAvgBtn').style.display = 'block';
+            document.getElementById('forceTpBtn').style.display = 'block';
             document.getElementById('avgStatus').style.display = 'block';
             document.getElementById('avgProgressCard').style.display = 'block';
 
@@ -1809,6 +1811,7 @@
             document.getElementById('startAvgBtn').style.display = 'block';
             document.getElementById('stopAvgBtn').style.display = 'none';
             document.getElementById('refreshAvgBtn').style.display = 'none';
+            document.getElementById('forceTpBtn').style.display = 'none';
             document.getElementById('avgStatus').style.display = 'none';
             document.getElementById('avgProgressCard').style.display = 'none';
 
@@ -1830,6 +1833,62 @@
             log('물타기 주문 갱신 완료', 'success');
         }
 
+        // 강제 익절 주문 (addedQty 체크 없이 바로 익절)
+        async function forcePlaceTpOrder() {
+            if (!selectedCoin || !currentPosition) {
+                log('포지션 없음', 'error');
+                return;
+            }
+
+            const symbol = selectedCoin;
+            const currentPrice = prices[symbol] || parseFloat(currentPosition.entryPrice);
+
+            try {
+                // 심볼 정보 조회
+                const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
+                const exchangeData = await exchangeInfo.json();
+                const symbolInfo = exchangeData.symbols.find(s => s.symbol === symbol);
+
+                if (!symbolInfo) throw new Error('심볼 정보 없음');
+
+                const pricePrecision = symbolInfo.pricePrecision;
+                const quantityPrecision = symbolInfo.quantityPrecision;
+                const tickSize = parseFloat(symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER').tickSize);
+                const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
+
+                // avgStartEntry 복원 시도
+                if (avgStartEntry === 0) {
+                    const savedKey = `avgStart_${symbol}`;
+                    const saved = localStorage.getItem(savedKey);
+                    if (saved) {
+                        const data = JSON.parse(saved);
+                        avgStartEntry = data.entry;
+                        log(`시작 평단 복원: $${avgStartEntry.toFixed(4)}`, 'info');
+                    } else {
+                        log('시작 평단 없음, 현재가 기준 익절', 'warning');
+                        avgStartEntry = currentPrice;
+                    }
+                }
+
+                // 익절가: 시작 평단 -2%
+                const tpPrice = roundToTick(avgStartEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+                // 익절 수량: $500 기준 (avgAmount 사용)
+                const tpQty = Math.max(roundStep((avgAmount * 2) / tpPrice, quantityPrecision), minQty);
+
+                log(`강제 익절 시도: $${tpPrice.toFixed(4)} × ${tpQty}`, 'info');
+
+                // 기존 익절 주문 취소 (있으면)
+                await cancelAveragingOrders();
+
+                // 익절 주문 배치
+                await createOrder(symbol, 'BUY', 'LIMIT', tpQty, tpPrice);
+                log(`강제 익절 주문 완료: $${tpPrice.toFixed(4)} × ${tpQty}`, 'success');
+
+            } catch (e) {
+                log(`강제 익절 실패: ${e.message}`, 'error');
+            }
+        }
+
         // 물타기 주문 배치 (포지션 변화 시에만 호출됨)
         async function placeAveragingOrders() {
             if (!selectedCoin || !currentPosition) return;
@@ -1837,6 +1896,24 @@
             const symbol = selectedCoin;
             const entryPrice = parseFloat(currentPosition.entryPrice);
             const currentPrice = prices[symbol] || entryPrice;
+
+            // 안전장치: avgStartEntry가 0이면 localStorage에서 복원
+            if (avgStartEntry === 0) {
+                const savedKey = `avgStart_${symbol}`;
+                const saved = localStorage.getItem(savedKey);
+                if (saved) {
+                    const data = JSON.parse(saved);
+                    avgStartQty = data.qty;
+                    avgStartEntry = data.entry;
+                    avgStartPnL = data.pnl;
+                    log(`시작 상태 복원: ${avgStartQty} @ $${avgStartEntry.toFixed(4)}`, 'info');
+                } else {
+                    // localStorage에도 없으면 현재 평단 사용
+                    avgStartEntry = entryPrice;
+                    avgStartQty = Math.abs(parseFloat(currentPosition.positionAmt));
+                    log(`경고: 시작 상태 없음, 현재 평단 사용: $${avgStartEntry.toFixed(4)}`, 'warning');
+                }
+            }
 
             try {
                 // 심볼 정보 조회

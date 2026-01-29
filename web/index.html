@@ -1751,13 +1751,27 @@
             lastPositionQty = Math.abs(parseFloat(currentPosition.positionAmt));
             lastEntryPrice = parseFloat(currentPosition.entryPrice);
 
-            // 물타기 효과 추적용 시작 상태 저장
-            avgStartQty = lastPositionQty;
-            avgStartEntry = lastEntryPrice;
-            avgStartPnL = parseFloat(currentPosition.unRealizedProfit);
+            // 물타기 효과 추적용 시작 상태 저장 (localStorage에서 복원 시도)
+            const savedKey = `avgStart_${selectedCoin}`;
+            const saved = localStorage.getItem(savedKey);
+            if (saved) {
+                const data = JSON.parse(saved);
+                avgStartQty = data.qty;
+                avgStartEntry = data.entry;
+                avgStartPnL = data.pnl;
+                log(`저장된 시작 상태 복원: ${avgStartQty} @ $${avgStartEntry.toFixed(4)}`, 'info');
+            } else {
+                avgStartQty = lastPositionQty;
+                avgStartEntry = lastEntryPrice;
+                avgStartPnL = parseFloat(currentPosition.unRealizedProfit);
+                // 저장
+                localStorage.setItem(savedKey, JSON.stringify({
+                    qty: avgStartQty, entry: avgStartEntry, pnl: avgStartPnL
+                }));
+            }
 
             log(`${selectedCoin} 물타기 시작 - 추가숏 +${avgInterval}%, 익절 -${avgTpInterval}%, $${avgAmount}`, 'info');
-            log(`초기 포지션: ${lastPositionQty} @ $${lastEntryPrice.toFixed(4)} (손익: ${avgStartPnL >= 0 ? '+' : ''}$${avgStartPnL.toFixed(2)})`, 'info');
+            log(`시작 평단: $${avgStartEntry.toFixed(4)} | 익절가: $${(avgStartEntry * (1 - avgTpInterval/100)).toFixed(4)}`, 'info');
 
             // 시작 상태 UI 표시
             updateAvgProgress();
@@ -1798,7 +1812,12 @@
             document.getElementById('avgStatus').style.display = 'none';
             document.getElementById('avgProgressCard').style.display = 'none';
 
-            log(`${selectedCoin} 물타기 정지`, 'info');
+            // 저장된 시작 상태 삭제 (완전 정지 시)
+            if (selectedCoin) {
+                localStorage.removeItem(`avgStart_${selectedCoin}`);
+            }
+
+            log(`${selectedCoin} 물타기 정지 (시작 상태 초기화)`, 'info');
         }
 
         // 물타기 주문 갱신 (취소 후 재배치)

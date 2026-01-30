@@ -1609,13 +1609,17 @@
 
         // ==================== 주문 취소 ====================
         function confirmCancel() {
-            if (!selectedCoin) return;
+            if (!selectedCoin) {
+                log('종목을 선택하세요', 'error');
+                return;
+            }
+            if (!isConnected) {
+                log('API 연결 필요', 'error');
+                return;
+            }
 
-            showModal(
-                '전체 취소',
-                `${selectedCoin} 오픈오더를 전체 취소하시겠습니까?`,
-                cancelOrders
-            );
+            // 바로 취소 실행
+            cancelOrders();
         }
 
         async function cancelOrders() {

@@ -1608,18 +1608,19 @@
         }
 
         // ==================== 주문 취소 ====================
-        function confirmCancel() {
+        async function confirmCancel() {
+            alert(`선택코인: ${selectedCoin || '없음'}\n연결상태: ${isConnected}`);
+
             if (!selectedCoin) {
-                log('종목을 선택하세요', 'error');
+                alert('종목을 선택하세요');
                 return;
             }
             if (!isConnected) {
-                log('API 연결 필요', 'error');
+                alert('API 연결 필요');
                 return;
             }
 
-            // 바로 취소 실행
-            cancelOrders();
+            await cancelOrders();
         }
 
         async function cancelOrders() {

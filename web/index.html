@@ -1626,7 +1626,7 @@
 
             try {
                 const timestamp = getServerTimestamp();
-                const params = `symbol=${symbol}&timestamp=${timestamp}`;
+                const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
                 const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/allOpenOrders?${params}&signature=${signature}`, {
@@ -1641,6 +1641,11 @@
 
                 log(`${symbol} 오픈오더 전체 취소 완료`, 'success');
                 alert(`${symbol}\n오픈오더 전체 취소 완료!`);
+
+                // 차트 갱신
+                if (chart && selectedCoin) {
+                    await addPriceLines(selectedCoin);
+                }
 
             } catch (e) {
                 log(`취소 실패: ${e.message}`, 'error');

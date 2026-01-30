@@ -515,7 +515,9 @@
 
         <!-- 물타기 설정 (포지션 있을 때만 표시) -->
         <div class="card" id="averagingCard" style="margin-top:15px; border: 1px solid #f0883e;">
-            <div class="card-title" style="color:#f0883e;">🔄 물타기 모드 <span id="avgCoinName" style="color:#58a6ff;"></span></div>
+            <div class="card-title" style="color:#f0883e;">🔄 물타기 모드 <span id="avgCoinName" style="color:#58a6ff;"></span>
+                <span style="float:right; font-size:11px;">활성: <span id="activeAvgList"><span style="color:#8b949e;">없음</span></span></span>
+            </div>
 
             <div id="noPositionMsg" style="padding:20px; text-align:center; color:#8b949e;">
                 종목을 선택하세요
@@ -635,6 +637,26 @@
         let apiSecret = localStorage.getItem('binance_api_secret') || '';
         let isConnected = false;
 
+        // 서버 시간 오프셋 (PC시간 - 서버시간)
+        let serverTimeOffset = 0;
+
+        // 서버 시간 기반 타임스탬프 가져오기
+        function getServerTimestamp() {
+            return Date.now() - serverTimeOffset;
+        }
+
+        // 서버 시간 동기화
+        async function syncServerTime() {
+            try {
+                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/time`);
+                const data = await res.json();
+                serverTimeOffset = Date.now() - data.serverTime;
+                console.log('서버 시간 동기화 완료, 오프셋:', serverTimeOffset, 'ms');
+            } catch (e) {
+                console.error('서버 시간 동기화 실패:', e);
+            }
+        }
+
         // 워치리스트 설정
         const MAX_WATCHLIST = 50;
         const MAX_LISTING_DAYS = 90;
@@ -664,23 +686,23 @@
         // 모달 콜백
         let modalCallback = null;
 
-        // 물타기 설정
+        // 물타기 설정 (공통)
         let avgInterval = 2;       // 추가 숏 간격 %
         let avgAmount = 500;       // 추가 금액 $
         let avgTpInterval = 2;     // 익절 간격 %
-        let isAveraging = false;   // 물타기 활성화 여부
-        let avgCheckInterval = null;  // 물타기 체크 인터벌
-        let currentPosition = null;   // 현재 포지션 정보
-        let lastPositionQty = 0;      // 마지막 포지션 수량 (체결 감지용)
-        let lastEntryPrice = 0;       // 마지막 평단 (변경 감지용)
 
-        // 물타기 효과 추적 (시작 시점 저장)
-        let avgStartQty = 0;          // 시작 수량
-        let avgStartEntry = 0;        // 시작 평단
-        let avgStartPnL = 0;          // 시작 손익
+        // 물타기 상태 (심볼별로 독립 관리, 최대 3개)
+        const MAX_AVERAGING = 3;
+        let averagingStates = {};  // { symbol: { isActive, checkInterval, position, lastQty, lastEntry, startQty, startEntry, startPnL } }
+
+        // 현재 선택된 코인의 포지션 (UI 표시용)
+        let currentPosition = null;
 
         // ==================== 초기화 ====================
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
+            // 서버 시간 동기화 먼저 실행
+            await syncServerTime();
+
             // 저장된 API 키 로드
             if (apiKey) {
                 document.getElementById('apiKey').value = apiKey;
@@ -700,6 +722,9 @@
                 connectAPI();
             }
 
+            // 서버 시간 주기적 동기화 (5분마다)
+            setInterval(syncServerTime, 300000);
+
             // 볼린저밴드 체크 (시작 시 + 1분마다)
             setTimeout(checkAllBollingerBands, 2000);
             setInterval(checkAllBollingerBands, 60000);
@@ -710,6 +735,7 @@
 
             // 물타기 카드 초기 상태 표시
             updateAveragingCard(null);
+            renderActiveAveragingList();
         });
 
         // ==================== API 연결 ====================
@@ -735,7 +761,7 @@
                 if (!ping.ok) throw new Error('Ping 실패');
 
                 // 계정 정보 확인 (서명 필요)
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
@@ -1016,7 +1042,7 @@
         async function updatePositionSymbols() {
             if (!isConnected) return;
             try {
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `recvWindow=60000&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
                 const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v2/positionRisk?${params}&signature=${signature}`, {
@@ -1133,7 +1159,7 @@
         // ==================== 포지션/오더 표시 ====================
         async function getPosition(symbol) {
             try {
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
@@ -1155,7 +1181,7 @@
 
         async function getOpenOrders(symbol) {
             try {
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
@@ -1511,7 +1537,7 @@
         }
 
         async function setLeverage(symbol, leverage) {
-            const timestamp = Date.now();
+            const timestamp = getServerTimestamp();
 
             // 1. 마진 타입을 격리(ISOLATED)로 설정
             try {
@@ -1555,7 +1581,7 @@
         }
 
         async function createOrder(symbol, side, type, quantity, price = null) {
-            const timestamp = Date.now();
+            const timestamp = getServerTimestamp();
             let params = `symbol=${symbol}&side=${side}&type=${type}&quantity=${quantity}&positionSide=SHORT&recvWindow=60000&timestamp=${timestamp}`;
 
             if (type === 'LIMIT') {
@@ -1599,7 +1625,7 @@
             log(`${symbol} 오픈오더 취소 중...`, 'info');
 
             try {
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `symbol=${symbol}&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
@@ -1730,17 +1756,24 @@
                 log('유효한 가격을 입력하세요', 'error');
                 return;
             }
-            avgStartEntry = price;
-            // localStorage에도 저장
-            if (selectedCoin) {
-                const savedKey = `avgStart_${selectedCoin}`;
-                localStorage.setItem(savedKey, JSON.stringify({
-                    qty: avgStartQty || Math.abs(parseFloat(currentPosition?.positionAmt || 0)),
-                    entry: avgStartEntry,
-                    pnl: avgStartPnL || 0
-                }));
+
+            if (!selectedCoin) return;
+
+            // averagingStates에 저장
+            if (averagingStates[selectedCoin]) {
+                averagingStates[selectedCoin].startEntry = price;
             }
-            log(`기준 평단 설정: $${avgStartEntry.toFixed(4)} → 익절가: $${(avgStartEntry * (1 - avgTpInterval/100)).toFixed(4)}`, 'success');
+
+            // localStorage에도 저장
+            const savedKey = `avgStart_${selectedCoin}`;
+            const posQty = currentPosition ? Math.abs(parseFloat(currentPosition.positionAmt)) : 0;
+            localStorage.setItem(savedKey, JSON.stringify({
+                qty: averagingStates[selectedCoin]?.startQty || posQty,
+                entry: price,
+                pnl: averagingStates[selectedCoin]?.startPnL || 0
+            }));
+
+            log(`기준 평단 설정: $${price.toFixed(4)} → 익절가: $${(price * (1 - avgTpInterval/100)).toFixed(4)}`, 'success');
             updateTpPreview();
         }
 
@@ -1750,7 +1783,8 @@
             const preview = document.getElementById('tpPreview');
             if (!input || !preview) return;
 
-            const basePrice = parseFloat(input.value) || avgStartEntry;
+            const state = selectedCoin ? averagingStates[selectedCoin] : null;
+            const basePrice = parseFloat(input.value) || state?.startEntry || 0;
             if (basePrice > 0) {
                 const tpPrice = basePrice * (1 - avgTpInterval / 100);
                 preview.textContent = `익절가: $${tpPrice.toFixed(4)}`;
@@ -1810,7 +1844,7 @@
                 if (avgSettings) avgSettings.style.display = 'block';
                 if (avgButtons) avgButtons.style.display = 'flex';
 
-                // 기준 평단 입력창 초기화 (localStorage에서 복원)
+                // 기준 평단 입력창
                 const savedKey = `avgStart_${symbol}`;
                 const saved = localStorage.getItem(savedKey);
                 const baseInput = document.getElementById('baseEntryInput');
@@ -1821,15 +1855,47 @@
                     baseInput.value = entryPrice.toFixed(4);
                 }
                 updateTpPreview();
+
+                // 물타기 활성 여부에 따라 버튼 표시
+                updateAveragingCardUI(symbol);
             } else {
                 noPositionMsg.textContent = `${symbol.replace('USDT', '')} 포지션 없음`;
                 noPositionMsg.style.display = 'block';
                 positionInfo.style.display = 'none';
                 if (avgSettings) avgSettings.style.display = 'none';
                 if (avgButtons) avgButtons.style.display = 'none';
-                if (isAveraging) {
-                    stopAveraging();
-                }
+            }
+        }
+
+        // 물타기 카드 버튼 UI 업데이트
+        function updateAveragingCardUI(symbol) {
+            const isActive = averagingStates[symbol]?.isActive;
+
+            document.getElementById('startAvgBtn').style.display = isActive ? 'none' : 'block';
+            document.getElementById('stopAvgBtn').style.display = isActive ? 'block' : 'none';
+            document.getElementById('refreshAvgBtn').style.display = isActive ? 'block' : 'none';
+            document.getElementById('forceTpBtn').style.display = isActive ? 'block' : 'none';
+            document.getElementById('avgStatus').style.display = isActive ? 'block' : 'none';
+            document.getElementById('avgProgressCard').style.display = isActive ? 'block' : 'none';
+
+            if (isActive) {
+                updateAvgProgress(symbol);
+            }
+        }
+
+        // 활성 물타기 목록 렌더링
+        function renderActiveAveragingList() {
+            const activeCoins = Object.keys(averagingStates).filter(s => averagingStates[s].isActive);
+            const listEl = document.getElementById('activeAvgList');
+            if (!listEl) return;
+
+            if (activeCoins.length === 0) {
+                listEl.innerHTML = '<span style="color:#8b949e;">없음</span>';
+            } else {
+                listEl.innerHTML = activeCoins.map(coin => {
+                    const state = averagingStates[coin];
+                    return `<span style="background:#238636; padding:2px 8px; border-radius:4px; margin-right:5px; cursor:pointer;" onclick="selectCoin('${coin}')">${coin.replace('USDT','')} <span style="color:#f85149; cursor:pointer;" onclick="event.stopPropagation(); stopAveraging('${coin}')">×</span></span>`;
+                }).join('');
             }
         }
 
@@ -1840,105 +1906,116 @@
                 return;
             }
 
-            isAveraging = true;
-            document.getElementById('startAvgBtn').style.display = 'none';
-            document.getElementById('stopAvgBtn').style.display = 'block';
-            document.getElementById('refreshAvgBtn').style.display = 'block';
-            document.getElementById('forceTpBtn').style.display = 'block';
-            document.getElementById('avgStatus').style.display = 'block';
-            document.getElementById('avgProgressCard').style.display = 'block';
+            const symbol = selectedCoin;
 
-            // 현재 포지션 상태 저장 (체결 감지용)
-            lastPositionQty = Math.abs(parseFloat(currentPosition.positionAmt));
-            lastEntryPrice = parseFloat(currentPosition.entryPrice);
+            // 이미 물타기 중인지 확인
+            if (averagingStates[symbol]?.isActive) {
+                log(`${symbol} 이미 물타기 진행 중`, 'warning');
+                return;
+            }
 
-            // 물타기 효과 추적용 시작 상태 저장
-            avgStartQty = lastPositionQty;
-            avgStartPnL = parseFloat(currentPosition.unRealizedProfit);
+            // 최대 개수 확인
+            const activeCount = Object.values(averagingStates).filter(s => s.isActive).length;
+            if (activeCount >= MAX_AVERAGING) {
+                log(`물타기 최대 ${MAX_AVERAGING}개까지만 가능`, 'error');
+                alert(`물타기는 최대 ${MAX_AVERAGING}개까지만 동시 진행 가능합니다.`);
+                return;
+            }
 
-            // 기준가 = 현재 시장가 (NOT 포지션 평단)
-            const currentPrice = prices[selectedCoin];
-            avgStartEntry = currentPrice;
+            // 현재 포지션 상태 저장
+            const positionQty = Math.abs(parseFloat(currentPosition.positionAmt));
+            const entryPrice = parseFloat(currentPosition.entryPrice);
+            const currentPrice = prices[symbol];
+            const pnl = parseFloat(currentPosition.unRealizedProfit);
+
+            // 심볼별 상태 저장
+            averagingStates[symbol] = {
+                isActive: true,
+                checkInterval: null,
+                position: currentPosition,
+                lastQty: positionQty,
+                lastEntry: entryPrice,
+                startQty: positionQty,
+                startEntry: currentPrice,  // 기준가 = 현재 시장가
+                startPnL: pnl
+            };
 
             // localStorage에 저장
-            const savedKey = `avgStart_${selectedCoin}`;
+            const savedKey = `avgStart_${symbol}`;
             localStorage.setItem(savedKey, JSON.stringify({
-                qty: avgStartQty, entry: avgStartEntry, pnl: avgStartPnL
+                qty: positionQty, entry: currentPrice, pnl: pnl
             }));
 
-            log(`${selectedCoin} 물타기 시작 - 추가숏 +${avgInterval}%, 익절 -${avgTpInterval}%, $${avgAmount}`, 'info');
-            log(`기준가(현재가): $${avgStartEntry.toFixed(4)} | 숏: $${(avgStartEntry * (1 + avgInterval/100)).toFixed(4)} | 익절: $${(avgStartEntry * (1 - avgTpInterval/100)).toFixed(4)}`, 'info');
-
-            // 시작 상태 UI 표시
-            updateAvgProgress();
+            log(`${symbol} 물타기 시작 - 추가숏 +${avgInterval}%, 익절 -${avgTpInterval}%, $${avgAmount}`, 'info');
+            log(`기준가(현재가): $${currentPrice.toFixed(4)} | 숏: $${(currentPrice * (1 + avgInterval/100)).toFixed(4)} | 익절: $${(currentPrice * (1 - avgTpInterval/100)).toFixed(4)}`, 'info');
 
             // 기존 주문 취소 후 초기 주문 배치
-            await cancelAveragingOrders();
-            await placeAveragingOrders();
+            await cancelAveragingOrders(symbol);
+            await placeAveragingOrders(symbol);
 
             // 30초마다 체크
-            avgCheckInterval = setInterval(async () => {
-                if (isAveraging && selectedCoin) {
-                    await checkAndRefreshAveragingOrders();
+            averagingStates[symbol].checkInterval = setInterval(async () => {
+                if (averagingStates[symbol]?.isActive) {
+                    await checkAndRefreshAveragingOrders(symbol);
                 }
             }, 30000);
+
+            // UI 업데이트
+            updateAveragingCardUI(symbol);
+            renderActiveAveragingList();
         }
 
         // 물타기 정지
-        async function stopAveraging() {
-            isAveraging = false;
+        async function stopAveraging(symbol = selectedCoin) {
+            if (!symbol || !averagingStates[symbol]) return;
 
-            if (avgCheckInterval) {
-                clearInterval(avgCheckInterval);
-                avgCheckInterval = null;
+            const state = averagingStates[symbol];
+
+            // 인터벌 정리
+            if (state.checkInterval) {
+                clearInterval(state.checkInterval);
             }
 
-            // 포지션 추적 변수 초기화
-            lastPositionQty = 0;
-            lastEntryPrice = 0;
+            // 상태 삭제
+            delete averagingStates[symbol];
 
-            // 물타기 효과 추적 변수 초기화
-            avgStartQty = 0;
-            avgStartEntry = 0;
-            avgStartPnL = 0;
+            // 저장된 시작 상태 삭제
+            localStorage.removeItem(`avgStart_${symbol}`);
 
-            document.getElementById('startAvgBtn').style.display = 'block';
-            document.getElementById('stopAvgBtn').style.display = 'none';
-            document.getElementById('refreshAvgBtn').style.display = 'none';
-            document.getElementById('forceTpBtn').style.display = 'none';
-            document.getElementById('avgStatus').style.display = 'none';
-            document.getElementById('avgProgressCard').style.display = 'none';
+            log(`${symbol} 물타기 정지`, 'info');
 
-            // 저장된 시작 상태 삭제 (완전 정지 시)
-            if (selectedCoin) {
-                localStorage.removeItem(`avgStart_${selectedCoin}`);
+            // UI 업데이트
+            if (symbol === selectedCoin) {
+                updateAveragingCardUI(symbol);
             }
-
-            log(`${selectedCoin} 물타기 정지 (시작 상태 초기화)`, 'info');
+            renderActiveAveragingList();
         }
 
         // 물타기 주문 갱신 (취소 후 재배치)
-        async function refreshAveragingOrders() {
-            if (!isAveraging || !selectedCoin) return;
+        async function refreshAveragingOrders(symbol = selectedCoin) {
+            if (!symbol || !averagingStates[symbol]?.isActive) return;
 
-            log('물타기 주문 갱신 중...', 'info');
-            await cancelAveragingOrders();
-            await placeAveragingOrders();
-            log('물타기 주문 갱신 완료', 'success');
+            log(`${symbol} 물타기 주문 갱신 중...`, 'info');
+            await cancelAveragingOrders(symbol);
+            await placeAveragingOrders(symbol);
+            log(`${symbol} 물타기 주문 갱신 완료`, 'success');
         }
 
         // 강제 익절 주문 (addedQty 체크 없이 바로 익절)
-        async function forcePlaceTpOrder() {
-            if (!selectedCoin || !currentPosition) {
+        async function forcePlaceTpOrder(symbol = selectedCoin) {
+            if (!symbol) {
+                log('종목 선택 필요', 'error');
+                return;
+            }
+
+            const state = averagingStates[symbol];
+            const position = state?.position || currentPosition;
+            if (!position) {
                 log('포지션 없음', 'error');
                 return;
             }
 
-            const symbol = selectedCoin;
-            const currentPrice = prices[symbol] || parseFloat(currentPosition.entryPrice);
-
             try {
-                // 심볼 정보 조회
                 const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
                 const exchangeData = await exchangeInfo.json();
                 const symbolInfo = exchangeData.symbols.find(s => s.symbol === symbol);
@@ -1950,65 +2027,57 @@
                 const tickSize = parseFloat(symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER').tickSize);
                 const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
 
-                // 기준가: 입력값 우선, 없으면 avgStartEntry 사용
-                const baseInput = document.getElementById('baseEntryInput');
-                let baseEntry = parseFloat(baseInput?.value) || avgStartEntry;
+                // 기준가: state에서 가져오거나 localStorage에서 복원
+                let baseEntry = state?.startEntry || 0;
                 if (baseEntry === 0) {
-                    const savedKey = `avgStart_${symbol}`;
-                    const saved = localStorage.getItem(savedKey);
+                    const saved = localStorage.getItem(`avgStart_${symbol}`);
                     if (saved) {
                         baseEntry = JSON.parse(saved).entry;
                     } else {
-                        log('기준가 없음, 현재 평단 사용', 'warning');
-                        baseEntry = parseFloat(currentPosition.entryPrice);
+                        baseEntry = parseFloat(position.entryPrice);
                     }
                 }
 
-                // 익절가: 기준가 -N%
                 const tpPrice = roundToTick(baseEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
-                log(`기준가: $${baseEntry.toFixed(4)} → 익절가: $${tpPrice.toFixed(4)} (-${avgTpInterval}%)`, 'info');
-                // 익절 수량: $500 기준 (avgAmount 사용)
                 const tpQty = Math.max(roundStep((avgAmount * 2) / tpPrice, quantityPrecision), minQty);
 
-                log(`강제 익절 시도: $${tpPrice.toFixed(4)} × ${tpQty}`, 'info');
-
-                // 익절 주문 배치 (기존 주문은 건드리지 않음)
+                log(`${symbol} 강제 익절: $${tpPrice.toFixed(4)} × ${tpQty}`, 'info');
                 await createOrder(symbol, 'BUY', 'LIMIT', tpQty, tpPrice);
-                log(`강제 익절 주문 완료: $${tpPrice.toFixed(4)} × ${tpQty}`, 'success');
+                log(`${symbol} 강제 익절 완료`, 'success');
 
             } catch (e) {
                 log(`강제 익절 실패: ${e.message}`, 'error');
             }
         }
 
-        // 물타기 주문 배치 (포지션 변화 시에만 호출됨)
-        async function placeAveragingOrders() {
-            if (!selectedCoin || !currentPosition) return;
+        // 물타기 주문 배치
+        async function placeAveragingOrders(symbol) {
+            const state = averagingStates[symbol];
+            if (!state) return;
 
-            const symbol = selectedCoin;
-            const entryPrice = parseFloat(currentPosition.entryPrice);
-            const currentPrice = prices[symbol] || entryPrice;
+            // 포지션 정보 가져오기
+            const position = await getPosition(symbol);
+            if (!position) return;
+            state.position = position;
 
-            // 안전장치: avgStartEntry가 0이면 localStorage에서 복원
-            if (avgStartEntry === 0) {
-                const savedKey = `avgStart_${symbol}`;
-                const saved = localStorage.getItem(savedKey);
+            const entryPrice = parseFloat(position.entryPrice);
+
+            // startEntry 복원
+            if (!state.startEntry) {
+                const saved = localStorage.getItem(`avgStart_${symbol}`);
                 if (saved) {
                     const data = JSON.parse(saved);
-                    avgStartQty = data.qty;
-                    avgStartEntry = data.entry;
-                    avgStartPnL = data.pnl;
-                    log(`시작 상태 복원: ${avgStartQty} @ $${avgStartEntry.toFixed(4)}`, 'info');
+                    state.startQty = data.qty;
+                    state.startEntry = data.entry;
+                    state.startPnL = data.pnl;
+                    log(`${symbol} 시작 상태 복원: $${state.startEntry.toFixed(4)}`, 'info');
                 } else {
-                    // localStorage에도 없으면 현재 평단 사용
-                    avgStartEntry = entryPrice;
-                    avgStartQty = Math.abs(parseFloat(currentPosition.positionAmt));
-                    log(`경고: 시작 상태 없음, 현재 평단 사용: $${avgStartEntry.toFixed(4)}`, 'warning');
+                    state.startEntry = entryPrice;
+                    state.startQty = Math.abs(parseFloat(position.positionAmt));
                 }
             }
 
             try {
-                // 심볼 정보 조회
                 const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
                 const exchangeData = await exchangeInfo.json();
                 const symbolInfo = exchangeData.symbols.find(s => s.symbol === symbol);
@@ -2020,55 +2089,45 @@
                 const tickSize = parseFloat(symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER').tickSize);
                 const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
 
-                // 목표 가격 계산 (기준가 = 시작 시 현재가)
-                // 추가 숏: 기준가 + N%
-                const avgPrice = roundToTick(avgStartEntry * (1 + avgInterval / 100), tickSize, pricePrecision);
+                const avgPrice = roundToTick(state.startEntry * (1 + avgInterval / 100), tickSize, pricePrecision);
                 const avgQty = Math.max(roundStep((avgAmount * 2) / avgPrice, quantityPrecision), minQty);
-                // 익절: 기준가 - N%
-                const tpPrice = roundToTick(avgStartEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+                const tpPrice = roundToTick(state.startEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
 
-                log(`기준가: $${avgStartEntry.toFixed(4)} | 추가숏: $${avgPrice.toFixed(4)} (+${avgInterval}%) | 익절: $${tpPrice.toFixed(4)} (-${avgTpInterval}%)`, 'info');
+                log(`${symbol} 기준가: $${state.startEntry.toFixed(4)} | 숏: $${avgPrice.toFixed(4)} | 익절: $${tpPrice.toFixed(4)}`, 'info');
 
-                // 보유 수량 확인
-                const positionQty = Math.abs(parseFloat(currentPosition.positionAmt));
-                // 물타기로 추가된 수량 (원금 보호)
-                const addedQty = positionQty - avgStartQty;
+                const positionQty = Math.abs(parseFloat(position.positionAmt));
+                const addedQty = positionQty - state.startQty;
 
-                // 1. 추가 숏 주문 (기준가 +N% 지점) - 즉시 배치
+                // 추가 숏 주문
                 try {
                     await createOrder(symbol, 'SELL', 'LIMIT', avgQty, avgPrice);
-                    log(`물타기 숏 주문: $${avgPrice.toFixed(4)} × ${avgQty}`, 'success');
+                    log(`${symbol} 숏 주문: $${avgPrice.toFixed(4)} × ${avgQty}`, 'success');
                 } catch (e) {
-                    log(`물타기 숏 실패: ${e.message}`, 'error');
+                    log(`${symbol} 숏 실패: ${e.message}`, 'error');
                 }
 
-                // 2. 익절 주문 (물타기로 추가된 수량이 있을 때만)
-                let tpQty = 0;
+                // 익절 주문 (추가 수량 있을 때만)
                 if (addedQty > minQty) {
-                    tpQty = Math.min(avgQty, addedQty);
+                    const tpQty = Math.min(avgQty, addedQty);
                     try {
                         await createOrder(symbol, 'BUY', 'LIMIT', tpQty, tpPrice);
-                        log(`물타기 익절 주문: $${tpPrice.toFixed(4)} × ${tpQty}`, 'success');
+                        log(`${symbol} 익절 주문: $${tpPrice.toFixed(4)} × ${tpQty}`, 'success');
                     } catch (e) {
-                        log(`물타기 익절 실패: ${e.message}`, 'error');
+                        log(`${symbol} 익절 실패: ${e.message}`, 'error');
                     }
                 } else {
-                    log(`익절 대기: 추가 숏 체결 후 익절 주문 배치`, 'info');
+                    log(`${symbol} 익절 대기 (숏 체결 후)`, 'info');
                 }
 
-                // 상태 업데이트
-                updateAvgOrderInfo(avgPrice, tpPrice, avgQty, tpQty);
-
             } catch (e) {
-                log(`물타기 주문 오류: ${e.message}`, 'error');
+                log(`${symbol} 주문 오류: ${e.message}`, 'error');
             }
         }
 
         // 익절만 배치 (추가숏 체결 후)
-        async function placeOnlyTpOrder() {
-            if (!selectedCoin || !currentPosition) return;
-
-            const symbol = selectedCoin;
+        async function placeOnlyTpOrder(symbol) {
+            const state = averagingStates[symbol];
+            if (!state || !state.position) return;
 
             try {
                 const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
@@ -2082,30 +2141,26 @@
                 const tickSize = parseFloat(symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER').tickSize);
                 const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
 
-                const positionQty = Math.abs(parseFloat(currentPosition.positionAmt));
-                const addedQty = positionQty - avgStartQty;
+                const positionQty = Math.abs(parseFloat(state.position.positionAmt));
+                const addedQty = positionQty - state.startQty;
 
-                // 익절: 기준가 - N%
-                const tpPrice = roundToTick(avgStartEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+                const tpPrice = roundToTick(state.startEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
                 const avgQty = Math.max(roundStep((avgAmount * 2) / tpPrice, quantityPrecision), minQty);
 
                 if (addedQty > minQty) {
                     const tpQty = Math.min(avgQty, addedQty);
                     await createOrder(symbol, 'BUY', 'LIMIT', tpQty, tpPrice);
-                    log(`익절 주문 배치: $${tpPrice.toFixed(4)} × ${tpQty}`, 'success');
-                    updateAvgOrderInfo(0, tpPrice, 0, tpQty);
+                    log(`${symbol} 익절 배치: $${tpPrice.toFixed(4)} × ${tpQty}`, 'success');
                 }
             } catch (e) {
-                log(`익절 주문 실패: ${e.message}`, 'error');
+                log(`${symbol} 익절 실패: ${e.message}`, 'error');
             }
         }
 
         // 추가숏만 배치 (익절 체결 후)
-        async function placeOnlyShortOrder() {
-            if (!selectedCoin || !currentPosition) return;
-
-            const symbol = selectedCoin;
-            const currentPrice = prices[symbol];
+        async function placeOnlyShortOrder(symbol) {
+            const state = averagingStates[symbol];
+            if (!state) return;
 
             try {
                 const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
@@ -2119,24 +2174,22 @@
                 const tickSize = parseFloat(symbolInfo.filters.find(f => f.filterType === 'PRICE_FILTER').tickSize);
                 const minQty = parseFloat(symbolInfo.filters.find(f => f.filterType === 'LOT_SIZE').minQty);
 
-                // 추가 숏: 기준가 + N%
-                const avgPrice = roundToTick(avgStartEntry * (1 + avgInterval / 100), tickSize, pricePrecision);
+                const avgPrice = roundToTick(state.startEntry * (1 + avgInterval / 100), tickSize, pricePrecision);
                 const avgQty = Math.max(roundStep((avgAmount * 2) / avgPrice, quantityPrecision), minQty);
-                const tpPrice = roundToTick(avgStartEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
+                const tpPrice = roundToTick(state.startEntry * (1 - avgTpInterval / 100), tickSize, pricePrecision);
 
                 await createOrder(symbol, 'SELL', 'LIMIT', avgQty, avgPrice);
-                log(`추가숏 주문 배치: $${avgPrice.toFixed(4)} × ${avgQty}`, 'success');
-                log(`기준가: $${avgStartEntry.toFixed(4)} | 숏: $${avgPrice.toFixed(4)} (+${avgInterval}%) | 익절 예정: $${tpPrice.toFixed(4)} (-${avgTpInterval}%)`, 'info');
-                updateAvgOrderInfo(avgPrice, tpPrice, avgQty, 0);
+                log(`${symbol} 숏 배치: $${avgPrice.toFixed(4)} × ${avgQty}`, 'success');
+                log(`${symbol} 기준가: $${state.startEntry.toFixed(4)} | 익절 예정: $${tpPrice.toFixed(4)}`, 'info');
             } catch (e) {
-                log(`추가숏 주문 실패: ${e.message}`, 'error');
+                log(`${symbol} 숏 실패: ${e.message}`, 'error');
             }
         }
 
         // 개별 주문 취소
         async function cancelOrder(symbol, orderId) {
             try {
-                const timestamp = Date.now();
+                const timestamp = getServerTimestamp();
                 const params = `symbol=${symbol}&orderId=${orderId}&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
@@ -2154,80 +2207,70 @@
             }
         }
 
-        // 물타기 주문 상태 확인 및 갱신
-        async function checkAndRefreshAveragingOrders() {
-            if (!selectedCoin || !isAveraging) return;
+        // 물타기 주문 상태 확인 및 갱신 (심볼별)
+        async function checkAndRefreshAveragingOrders(symbol) {
+            const state = averagingStates[symbol];
+            if (!state || !state.isActive) return;
 
             // 포지션 업데이트
-            await updateAveragingCard(selectedCoin);
-
-            if (!currentPosition || parseFloat(currentPosition.positionAmt) === 0) {
-                log('포지션 청산됨 - 물타기 자동 정지', 'info');
-                stopAveraging();
+            const position = await getPosition(symbol);
+            if (!position || parseFloat(position.positionAmt) === 0) {
+                log(`${symbol} 포지션 청산됨 - 물타기 자동 정지`, 'info');
+                stopAveraging(symbol);
                 return;
             }
+            state.position = position;
 
             // 가격 업데이트
-            await updatePrice(selectedCoin);
+            await updatePrice(symbol);
 
-            // 포지션 변화 감지 (주문 체결 시에만 재배치)
-            const currentQty = Math.abs(parseFloat(currentPosition.positionAmt));
-            const currentEntry = parseFloat(currentPosition.entryPrice);
+            // 포지션 변화 감지
+            const currentQty = Math.abs(parseFloat(position.positionAmt));
+            const currentEntry = parseFloat(position.entryPrice);
 
-            const qtyChanged = lastPositionQty !== currentQty;
-            const entryChanged = Math.abs(lastEntryPrice - currentEntry) > 0.0001;
+            const qtyChanged = state.lastQty !== currentQty;
+            const entryChanged = Math.abs(state.lastEntry - currentEntry) > 0.0001;
 
             if (qtyChanged || entryChanged) {
-                // 포지션 변화 있음 = 주문 체결됨
-                const isAddShort = currentQty > lastPositionQty; // 수량 증가 = 추가숏
-                const isTpFill = currentQty < lastPositionQty;   // 수량 감소 = 익절
+                const isAddShort = currentQty > state.lastQty;
+                const isTpFill = currentQty < state.lastQty;
                 const changeType = isAddShort ? '추가숏 체결' : '익절 체결';
-                log(`${changeType}: ${lastPositionQty} → ${currentQty}, 평단: $${lastEntryPrice.toFixed(4)} → $${currentEntry.toFixed(4)}`, 'info');
+                log(`${symbol} ${changeType}: ${state.lastQty.toFixed(0)} → ${currentQty.toFixed(0)}`, 'info');
 
-                // 기존 주문 취소
-                await cancelAveragingOrders();
+                await cancelAveragingOrders(symbol);
 
                 if (isAddShort) {
-                    // 추가숏 체결 → 익절만 배치 (추가숏 X, 연속 체결 방지)
-                    await placeOnlyTpOrder();
+                    await placeOnlyTpOrder(symbol);
                 } else if (isTpFill) {
-                    // 익절 체결 → 새 현재가로 기준가 갱신 후 추가숏만 배치
-                    const newRefPrice = prices[selectedCoin];
-                    avgStartEntry = newRefPrice;
-                    avgStartQty = currentQty; // 현재 수량을 새 기준으로
-                    log(`새 사이클: 기준가 갱신 → $${newRefPrice.toFixed(4)}`, 'info');
+                    const newRefPrice = prices[symbol];
+                    state.startEntry = newRefPrice;
+                    state.startQty = currentQty;
+                    log(`${symbol} 새 사이클: 기준가 → $${newRefPrice.toFixed(4)}`, 'info');
 
-                    // localStorage 업데이트
-                    const savedKey = `avgStart_${selectedCoin}`;
-                    localStorage.setItem(savedKey, JSON.stringify({
-                        qty: avgStartQty, entry: avgStartEntry, pnl: parseFloat(currentPosition.unRealizedProfit)
+                    localStorage.setItem(`avgStart_${symbol}`, JSON.stringify({
+                        qty: state.startQty, entry: state.startEntry, pnl: parseFloat(position.unRealizedProfit)
                     }));
 
-                    await placeOnlyShortOrder();
+                    await placeOnlyShortOrder(symbol);
                 }
 
-                // 새 포지션 상태 저장
-                lastPositionQty = currentQty;
-                lastEntryPrice = currentEntry;
+                state.lastQty = currentQty;
+                state.lastEntry = currentEntry;
             } else {
-                // 포지션 변화 없음 - 주문 유지, 상태만 업데이트
-                log(`물타기 대기 중... (현재가: $${prices[selectedCoin].toFixed(4)})`, 'info');
+                log(`${symbol} 대기 중... ($${prices[symbol]?.toFixed(4) || '-'})`, 'info');
             }
 
-            // 물타기 효과 업데이트
-            updateAvgProgress();
-
-            // 차트 갱신
-            if (chart && selectedCoin) {
-                await addPriceLines(selectedCoin);
+            // 선택된 코인이면 UI 업데이트
+            if (symbol === selectedCoin) {
+                currentPosition = position;
+                updateAvgProgress(symbol);
             }
         }
 
         // 물타기 관련 주문만 취소
-        async function cancelAveragingOrders() {
-            if (!selectedCoin) return;
+        async function cancelAveragingOrders(symbol) {
+            if (!symbol) return;
 
-            const symbol = selectedCoin;
             const openOrders = await getOpenOrders(symbol);
 
             for (const order of openOrders) {
@@ -2235,7 +2278,7 @@
                     await cancelOrder(symbol, order.orderId);
                 }
             }
-            log(`${symbol} 물타기 주문 정리`, 'info');
+            log(`${symbol} 주문 정리`, 'info');
         }
 
         // 물타기 주문 정보 표시
@@ -2251,38 +2294,40 @@
         }
 
         // 물타기 효과 표시 업데이트
-        function updateAvgProgress() {
-            if (!currentPosition || !isAveraging) return;
+        function updateAvgProgress(symbol = selectedCoin) {
+            const state = averagingStates[symbol];
+            if (!state || !state.position) return;
 
-            const currentQty = Math.abs(parseFloat(currentPosition.positionAmt));
-            const currentEntry = parseFloat(currentPosition.entryPrice);
-            const currentPnL = parseFloat(currentPosition.unRealizedProfit);
+            const position = state.position;
+            const currentQty = Math.abs(parseFloat(position.positionAmt));
+            const currentEntry = parseFloat(position.entryPrice);
+            const currentPnL = parseFloat(position.unRealizedProfit);
 
             // 시작 상태 표시
             document.getElementById('avgStartInfo').textContent =
-                `$${avgStartEntry.toFixed(4)} × ${avgStartQty.toFixed(4)} (${avgStartPnL >= 0 ? '+' : ''}$${avgStartPnL.toFixed(2)})`;
+                `$${state.startEntry.toFixed(4)} × ${state.startQty.toFixed(0)} (${state.startPnL >= 0 ? '+' : ''}$${state.startPnL.toFixed(2)})`;
 
             // 현재 상태 표시
             document.getElementById('avgCurrentInfo').textContent =
-                `$${currentEntry.toFixed(4)} × ${currentQty.toFixed(4)} (${currentPnL >= 0 ? '+' : ''}$${currentPnL.toFixed(2)})`;
+                `$${currentEntry.toFixed(4)} × ${currentQty.toFixed(0)} (${currentPnL >= 0 ? '+' : ''}$${currentPnL.toFixed(2)})`;
 
             // 평단 변화 (숏이니까 높아지면 좋음)
-            const entryChange = currentEntry - avgStartEntry;
-            const entryChangePct = (entryChange / avgStartEntry * 100).toFixed(2);
+            const entryChange = currentEntry - state.startEntry;
+            const entryChangePct = state.startEntry > 0 ? (entryChange / state.startEntry * 100).toFixed(2) : '0';
             const entryColor = entryChange > 0 ? '#7ee787' : entryChange < 0 ? '#f85149' : '#8b949e';
             const entrySign = entryChange > 0 ? '↑' : entryChange < 0 ? '↓' : '';
             document.getElementById('avgEntryChange').innerHTML =
                 `<span style="color:${entryColor}">${entrySign} ${entryChange >= 0 ? '+' : ''}$${entryChange.toFixed(4)} (${entryChangePct}%)</span>`;
 
             // 수량 변화 (줄어들면 익절됨)
-            const qtyChange = currentQty - avgStartQty;
+            const qtyChange = currentQty - state.startQty;
             const qtyColor = qtyChange < 0 ? '#7ee787' : qtyChange > 0 ? '#f0883e' : '#8b949e';
             const qtySign = qtyChange > 0 ? '+' : '';
             document.getElementById('avgQtyChange').innerHTML =
-                `<span style="color:${qtyColor}">${qtySign}${qtyChange.toFixed(4)}</span>`;
+                `<span style="color:${qtyColor}">${qtySign}${qtyChange.toFixed(0)}</span>`;
 
             // 손익 변화
-            const pnlChange = currentPnL - avgStartPnL;
+            const pnlChange = currentPnL - state.startPnL;
             const pnlColor = pnlChange > 0 ? '#7ee787' : pnlChange < 0 ? '#f85149' : '#8b949e';
             document.getElementById('avgPnLChange').innerHTML =
                 `<span style="color:${pnlColor}">${pnlChange >= 0 ? '+' : ''}$${pnlChange.toFixed(2)}</span>`;

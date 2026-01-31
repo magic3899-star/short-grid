@@ -513,6 +513,14 @@
             🗑 선택 코인 오픈오더 전체 취소
         </button>
 
+        <!-- 활성 물타기 종목 요약 (여러 종목 한눈에) -->
+        <div class="card" id="activeAvgSummaryCard" style="margin-top:15px; border: 1px solid #238636; display:none;">
+            <div class="card-title" style="color:#238636;">📊 물타기 진행 현황</div>
+            <div id="activeAvgSummary" style="font-size:12px;">
+                <!-- 동적으로 채워짐 -->
+            </div>
+        </div>
+
         <!-- 물타기 설정 (포지션 있을 때만 표시) -->
         <div class="card" id="averagingCard" style="margin-top:15px; border: 1px solid #f0883e;">
             <div class="card-title" style="color:#f0883e;">🔄 물타기 모드 <span id="avgCoinName" style="color:#58a6ff;"></span>
@@ -1996,19 +2004,125 @@
         }
 
         // 활성 물타기 목록 렌더링
-        function renderActiveAveragingList() {
+        async function renderActiveAveragingList() {
             const activeCoins = Object.keys(averagingStates).filter(s => averagingStates[s].isActive);
             const listEl = document.getElementById('activeAvgList');
+            const summaryCard = document.getElementById('activeAvgSummaryCard');
+            const summaryEl = document.getElementById('activeAvgSummary');
+
             if (!listEl) return;
 
             if (activeCoins.length === 0) {
                 listEl.innerHTML = '<span style="color:#8b949e;">없음</span>';
+                if (summaryCard) summaryCard.style.display = 'none';
             } else {
                 listEl.innerHTML = activeCoins.map(coin => {
                     const state = averagingStates[coin];
                     return `<span style="background:#238636; padding:2px 8px; border-radius:4px; margin-right:5px; cursor:pointer;" onclick="selectCoin('${coin}')">${coin.replace('USDT','')} <span style="color:#f85149; cursor:pointer;" onclick="event.stopPropagation(); stopAveraging('${coin}')">×</span></span>`;
                 }).join('');
+
+                // 요약 카드 표시
+                if (summaryCard && summaryEl) {
+                    summaryCard.style.display = 'block';
+                    await renderActiveAvgSummary(activeCoins);
+                }
             }
+        }
+
+        // 활성 물타기 요약 정보 렌더링
+        async function renderActiveAvgSummary(activeCoins) {
+            const summaryEl = document.getElementById('activeAvgSummary');
+            if (!summaryEl) return;
+
+            let html = '';
+
+            for (const symbol of activeCoins) {
+                const state = averagingStates[symbol];
+                if (!state) continue;
+
+                // 포지션 정보 가져오기
+                let position = state.position;
+                if (!position) {
+                    position = await getPosition(symbol);
+                    if (position) state.position = position;
+                }
+
+                const currentPrice = prices[symbol] || 0;
+                const currentQty = position ? Math.abs(parseFloat(position.positionAmt)) : 0;
+                const currentEntry = position ? parseFloat(position.entryPrice) : 0;
+                const currentPnL = position ? parseFloat(position.unRealizedProfit) : 0;
+
+                // 물타기로 추가된 수량
+                const addedQty = currentQty - (state.startQty || 0);
+                const hasAdded = addedQty > 0;
+
+                // 물타기 손익 (숏이므로 평단 - 현재가)
+                const avgPnL = hasAdded ? addedQty * (currentEntry - currentPrice) : 0;
+
+                // 숏 오픈오더 가격
+                const shortOrderPrice = state.shortOrderPrice || (state.startEntry * (1 + avgInterval / 100));
+
+                // 오픈오더 조회
+                let shortOrders = [], tpOrders = [];
+                try {
+                    const orders = await getOpenOrders(symbol);
+                    shortOrders = orders.filter(o => o.positionSide === 'SHORT' && o.side === 'SELL');
+                    tpOrders = orders.filter(o => o.positionSide === 'SHORT' && o.side === 'BUY');
+                } catch (e) {}
+
+                const pnlColor = currentPnL >= 0 ? '#7ee787' : '#f85149';
+                const avgPnLColor = avgPnL >= 0 ? '#7ee787' : '#f85149';
+                const isSelected = symbol === selectedCoin;
+
+                html += `<div style="padding:10px; background:${isSelected ? '#1a3a1a' : '#21262d'}; border-radius:6px; margin-bottom:8px; border:${isSelected ? '1px solid #238636' : 'none'}; cursor:pointer;" onclick="selectCoin('${symbol}')">`;
+
+                // 헤더
+                html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">`;
+                html += `<span style="font-weight:bold; color:#58a6ff; font-size:14px;">${symbol.replace('USDT', '')}</span>`;
+                html += `<span style="color:${pnlColor}; font-weight:bold;">${currentPnL >= 0 ? '+' : ''}$${currentPnL.toFixed(2)}</span>`;
+                html += `</div>`;
+
+                // 포지션 정보
+                html += `<div style="display:flex; justify-content:space-between; color:#c9d1d9; margin-bottom:4px;">`;
+                html += `<span>평단: $${currentEntry.toFixed(4)}</span>`;
+                html += `<span>수량: ${currentQty.toFixed(0)}</span>`;
+                html += `</div>`;
+
+                // 물타기 정보
+                html += `<div style="display:flex; justify-content:space-between; color:#8b949e; margin-bottom:4px;">`;
+                html += `<span>기준가: $${(state.startEntry || 0).toFixed(4)}</span>`;
+                if (hasAdded) {
+                    html += `<span style="color:#f0883e;">추가: +${addedQty.toFixed(0)}</span>`;
+                } else {
+                    html += `<span>추가: 0</span>`;
+                }
+                html += `</div>`;
+
+                // 오픈오더 현황
+                html += `<div style="display:flex; gap:15px; font-size:11px; margin-top:6px; padding-top:6px; border-top:1px solid #30363d;">`;
+
+                // 숏 오픈오더
+                if (shortOrders.length > 0) {
+                    const order = shortOrders[0];
+                    html += `<span style="color:#f0883e;">📈 숏: $${parseFloat(order.price).toFixed(4)}</span>`;
+                } else {
+                    html += `<span style="color:#8b949e;">📈 숏 대기</span>`;
+                }
+
+                // 익절 오픈오더
+                if (tpOrders.length > 0) {
+                    const order = tpOrders[0];
+                    html += `<span style="color:#7ee787;">📉 익절: $${parseFloat(order.price).toFixed(4)}</span>`;
+                } else {
+                    html += `<span style="color:#8b949e;">📉 익절 대기</span>`;
+                }
+
+                html += `</div>`;
+
+                html += `</div>`;
+            }
+
+            summaryEl.innerHTML = html;
         }
 
         // 물타기 시작
@@ -2445,6 +2559,12 @@
             if (symbol === selectedCoin) {
                 currentPosition = position;
                 updateAvgProgress(symbol);
+            }
+
+            // 요약 카드 업데이트
+            const activeCoins = Object.keys(averagingStates).filter(s => averagingStates[s].isActive);
+            if (activeCoins.length > 0) {
+                await renderActiveAvgSummary(activeCoins);
             }
         }
 

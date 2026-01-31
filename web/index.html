@@ -590,6 +590,11 @@
     </style>
 </head>
 <body>
+    <!-- GitHub Pages 안내 배너 (로컬이 아닐 때만 표시) -->
+    <div id="remoteBanner" style="display:none; background:#f0883e; color:#0d1117; padding:10px 15px; text-align:center; font-size:13px; font-weight:bold;">
+        ⚠️ 원격 접속 - API 연결 불가 | 로컬에서 <code style="background:#21262d; color:#f0883e; padding:2px 6px; border-radius:4px;">start.bat</code> 실행 필요
+    </div>
+
     <!-- 헤더 -->
     <div class="header">
         <h1>⚡ SHORT GRID ORDER</h1>
@@ -833,17 +838,6 @@
         // ==================== 전역 변수 ====================
         const BINANCE_FUTURES_URL_DIRECT = 'https://fapi.binance.com';
 
-        // CORS 프록시 목록 (순서대로 시도)
-        const CORS_PROXIES = [
-            '',  // 직접 연결 (로컬호스트)
-            'https://corsproxy.io/?',
-            'https://api.allorigins.win/raw?url=',
-            'https://cors-anywhere.herokuapp.com/'
-        ];
-
-        let currentProxyIndex = 0;
-        let BINANCE_FUTURES_URL = BINANCE_FUTURES_URL_DIRECT;
-
         // 현재 환경 감지 (로컬 vs GitHub Pages)
         function isLocalhost() {
             return window.location.hostname === 'localhost' ||
@@ -852,42 +846,9 @@
                    window.location.protocol === 'file:';
         }
 
-        // CORS 프록시 적용 URL 생성
-        function getProxiedUrl(url) {
-            if (isLocalhost()) {
-                return url;  // 로컬에서는 프록시 불필요
-            }
-            const proxy = CORS_PROXIES[currentProxyIndex];
-            if (!proxy) return url;
-            return proxy + encodeURIComponent(url);
-        }
-
-        // 다음 프록시로 전환
-        function switchToNextProxy() {
-            currentProxyIndex = (currentProxyIndex + 1) % CORS_PROXIES.length;
-            console.log('프록시 전환:', CORS_PROXIES[currentProxyIndex] || '직접 연결');
-        }
-
-        // CORS 대응 fetch wrapper
+        // 간단한 fetch wrapper
         async function corsFetch(url, options = {}) {
-            const maxRetries = CORS_PROXIES.length;
-            let lastError = null;
-
-            for (let i = 0; i < maxRetries; i++) {
-                try {
-                    const proxiedUrl = getProxiedUrl(url);
-                    const res = await fetch(proxiedUrl, options);
-                    if (res.ok || res.status === 400 || res.status === 401) {
-                        return res;  // 성공 또는 API 에러 (CORS 아님)
-                    }
-                    throw new Error(`HTTP ${res.status}`);
-                } catch (e) {
-                    lastError = e;
-                    console.warn(`프록시 ${currentProxyIndex} 실패:`, e.message);
-                    switchToNextProxy();
-                }
-            }
-            throw lastError || new Error('모든 프록시 실패');
+            return await fetch(url, options);
         }
 
         let apiKey = localStorage.getItem('binance_api_key') || '';
@@ -1061,9 +1022,14 @@
 
         // ==================== 초기화 ====================
         document.addEventListener('DOMContentLoaded', async () => {
-            // 환경 정보 표시
+            // 환경 정보 표시 및 배너
             const envInfo = isLocalhost() ? '로컬' : 'GitHub Pages';
-            console.log(`환경: ${envInfo}, 프록시: ${CORS_PROXIES[currentProxyIndex] || '직접 연결'}`);
+            console.log(`환경: ${envInfo}`);
+
+            // GitHub Pages 접속 시 안내 배너 표시
+            if (!isLocalhost()) {
+                document.getElementById('remoteBanner').style.display = 'block';
+            }
 
             // 서버 시간 동기화 먼저 실행
             await syncServerTime();
@@ -1162,13 +1128,13 @@
                 setTimeout(restoreAveragingStates, 1000);
 
             } catch (e) {
-                const proxyInfo = CORS_PROXIES[currentProxyIndex] ? `프록시: ${currentProxyIndex}` : '직접 연결';
-                log(`연결 실패: ${e.message} (${proxyInfo})`, 'error');
+                log(`연결 실패: ${e.message}`, 'error');
                 updateStatus(false, '연결 실패');
 
                 // GitHub Pages에서 실패 시 도움말 표시
                 if (!isLocalhost()) {
-                    log('💡 GitHub Pages에서는 CORS 제한이 있을 수 있습니다.', 'info');
+                    log('⚠️ GitHub Pages에서는 CORS 제한으로 API 연결 불가', 'error');
+                    log('💡 로컬에서 start.bat 실행 후 localhost:8080 접속 필요', 'info');
                 }
             }
         }

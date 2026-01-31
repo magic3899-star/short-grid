@@ -2784,6 +2784,9 @@
 
                     log(`${symbol} 익절 실현: +$${tpProfit.toFixed(2)} (총 ${state.tpCount}회, 누적 +$${state.realizedProfit.toFixed(2)})`, 'success');
 
+                    // 물타기 진입 내역 초기화 (익절 완료되었으므로)
+                    state.entries = [];
+
                     // 새 현재가 기준으로 +2% 숏 주문
                     state.startEntry = currentPrice;
                     state.startQty = currentQty;

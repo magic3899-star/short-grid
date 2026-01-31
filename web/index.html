@@ -911,7 +911,7 @@
 
         // 물타기 상태 (심볼별로 독립 관리, 최대 3개)
         const MAX_AVERAGING = 3;
-        let averagingStates = {};  // { symbol: { isActive, checkInterval, position, lastQty, lastEntry, startQty, startEntry, startPnL, shortOrderPrice, realizedProfit, tpCount } }
+        let averagingStates = {};  // { symbol: { isActive, checkInterval, position, lastQty, lastEntry, startQty, startEntry, startPnL, shortOrderPrice, realizedProfit, tpCount, entries: [{price, qty, time}] } }
 
         // 물타기 상태 localStorage 저장
         function saveAveragingStates() {
@@ -928,7 +928,8 @@
                         lastQty: state.lastQty,
                         lastEntry: state.lastEntry,
                         realizedProfit: state.realizedProfit || 0,
-                        tpCount: state.tpCount || 0
+                        tpCount: state.tpCount || 0,
+                        entries: state.entries || []
                     };
                 }
             }
@@ -985,7 +986,8 @@
                     startPnL: savedState.startPnL || 0,
                     shortOrderPrice: savedState.shortOrderPrice || (savedState.startEntry * (1 + avgInterval / 100)),
                     realizedProfit: savedState.realizedProfit || 0,
-                    tpCount: savedState.tpCount || 0
+                    tpCount: savedState.tpCount || 0,
+                    entries: savedState.entries || []
                 };
 
                 log(`${symbol} 물타기 복원 완료 - 기준가: $${savedState.startEntry?.toFixed(4)}`, 'success');
@@ -2754,7 +2756,22 @@
                 await cancelAveragingOrders(symbol);
 
                 if (isAddShort) {
-                    // 숏 체결됨 → 체결가(현재 평단) 기준 -4%에 익절 주문
+                    // 숏 체결됨 → 진입 기록 추가
+                    const addedQty = currentQty - state.lastQty;
+                    // 추가 진입 가격 추정 (평단 역산: 새평단 = (이전수량*이전평단 + 추가수량*추가가격) / 새수량)
+                    const addedPrice = (currentQty * currentEntry - state.lastQty * state.lastEntry) / addedQty;
+
+                    if (!state.entries) state.entries = [];
+                    state.entries.push({
+                        price: addedPrice,
+                        qty: addedQty,
+                        time: new Date().toLocaleString('ko-KR'),
+                        entry: currentEntry  // 체결 후 평단
+                    });
+
+                    log(`${symbol} 물타기 진입: $${addedPrice.toFixed(4)} × ${addedQty.toFixed(0)}`, 'success');
+
+                    // 체결가(현재 평단) 기준 -2%에 익절 주문
                     await placeOnlyTpOrderAtPrice(symbol, currentEntry);
                 } else if (isTpFill) {
                     // 익절 체결됨 → 실현 수익 계산
@@ -2962,15 +2979,38 @@
             html += `<div style="margin-top:6px; color:${changeColor}; font-size:13px;">${changeIcon} ${entryImproved ? '+' : ''}${entryChangePct.toFixed(2)}% (${entryImproved ? '숏에 유리' : '숏에 불리'})</div>`;
             html += `</div>`;
 
-            // 물타기 진입 현황
+            // 물타기 진입 내역 (실제 체결 기록)
+            const entries = state.entries || [];
             html += `<div style="padding:8px; background:#21262d; border-radius:4px; margin-bottom:8px;">`;
-            html += `<div style="color:#8b949e; margin-bottom:4px;">💰 물타기 진입 현황</div>`;
-            if (hasAdded) {
-                html += `<div>추가 수량: <span style="color:#f0883e;">${addedQty.toFixed(0)}개</span></div>`;
-                html += `<div>진입 평단: <span style="color:#58a6ff;">$${currentEntry.toFixed(4)}</span></div>`;
-                html += `<div>투입 마진: <span style="color:#c9d1d9;">$${avgEntryAmount.toFixed(2)}</span> (2배 레버리지)</div>`;
-                const avgPnLColor = avgPnL >= 0 ? '#7ee787' : '#f85149';
-                html += `<div>물타기 손익: <span style="color:${avgPnLColor};">${avgPnL >= 0 ? '+' : ''}$${avgPnL.toFixed(2)}</span></div>`;
+            html += `<div style="color:#8b949e; margin-bottom:4px;">💰 물타기 진입 내역</div>`;
+            if (entries.length > 0) {
+                let totalQty = 0;
+                let totalValue = 0;
+                for (let i = 0; i < entries.length; i++) {
+                    const e = entries[i];
+                    totalQty += e.qty;
+                    totalValue += e.price * e.qty;
+                    const pnl = e.qty * (e.price - currentPrice);  // 숏이므로 진입가 - 현재가
+                    const pnlColor = pnl >= 0 ? '#7ee787' : '#f85149';
+                    html += `<div style="margin-bottom:4px; padding:4px; background:#0d1117; border-radius:4px;">`;
+                    html += `<div style="display:flex; justify-content:space-between;">`;
+                    html += `<span style="color:#f0883e;">${i+1}차</span>`;
+                    html += `<span style="color:#58a6ff;">$${e.price.toFixed(4)} × ${e.qty.toFixed(0)}</span>`;
+                    html += `</div>`;
+                    html += `<div style="display:flex; justify-content:space-between; font-size:11px; color:#8b949e;">`;
+                    html += `<span>${e.time}</span>`;
+                    html += `<span style="color:${pnlColor};">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>`;
+                    html += `</div>`;
+                    html += `</div>`;
+                }
+                // 물타기 평균 진입가
+                const avgEntryPrice = totalValue / totalQty;
+                const totalPnl = totalQty * (avgEntryPrice - currentPrice);
+                const totalPnlColor = totalPnl >= 0 ? '#7ee787' : '#f85149';
+                html += `<div style="margin-top:6px; padding-top:6px; border-top:1px solid #30363d;">`;
+                html += `<div>물타기 평균: <span style="color:#58a6ff;">$${avgEntryPrice.toFixed(4)}</span> × ${totalQty.toFixed(0)}</div>`;
+                html += `<div>물타기 손익: <span style="color:${totalPnlColor};">${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}</span></div>`;
+                html += `</div>`;
             } else {
                 html += `<div style="color:#8b949e;">아직 물타기 체결 없음</div>`;
             }

@@ -2,8 +2,14 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#0d1117">
+    <meta name="description" content="바이낸스 선물 숏 그리드 자동매매">
     <title>SHORT GRID ORDER</title>
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
     <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
     <style>
@@ -389,18 +395,196 @@
             flex: 1;
         }
 
-        /* 반응형 */
-        @media (max-width: 400px) {
+        /* ==================== 모바일 최적화 ==================== */
+
+        /* 터치 최적화 */
+        @media (pointer: coarse) {
+            .btn, .coin-item, .api-input, .price-input {
+                min-height: 48px;  /* 터치 타겟 최소 크기 */
+            }
+
+            .coin-item {
+                padding: 12px 16px;
+            }
+        }
+
+        /* 반응형 - 태블릿 */
+        @media (max-width: 768px) {
+            .container {
+                width: 95%;
+                padding: 10px;
+            }
+
+            #chartContainer {
+                height: 350px !important;
+            }
+
+            .coin-list {
+                max-height: 250px;
+            }
+        }
+
+        /* 반응형 - 모바일 */
+        @media (max-width: 480px) {
+            .container {
+                width: 100%;
+                padding: 8px;
+            }
+
+            .header {
+                padding: 12px 15px;
+            }
+
             .header h1 {
                 font-size: 1.1em;
             }
 
+            .header-info {
+                font-size: 0.75em;
+            }
+
+            .card {
+                padding: 12px;
+                margin-bottom: 10px;
+                border-radius: 8px;
+            }
+
+            .card-title {
+                font-size: 0.8em;
+            }
+
+            .api-input {
+                padding: 14px 12px;
+                font-size: 16px;  /* iOS 줌 방지 */
+            }
+
+            .btn {
+                padding: 14px 16px;
+                font-size: 15px;
+            }
+
+            .coin-item {
+                padding: 10px 12px;
+                font-size: 14px;
+            }
+
+            .coin-list {
+                max-height: 200px;
+                padding: 8px;
+                gap: 6px;
+            }
+
+            #chartContainer {
+                height: 280px !important;
+            }
+
+            #chartTitle {
+                padding: 8px 12px;
+                font-size: 0.9em;
+            }
+
+            /* 설정 행 조정 */
+            .setting-row {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 8px;
+            }
+
+            .setting-row label {
+                min-width: auto;
+            }
+
+            .setting-row .btn {
+                width: auto;
+                min-width: 36px;
+            }
+
+            /* 물타기 카드 */
+            .avg-status {
+                font-size: 0.85em;
+            }
+
+            .avg-info-row {
+                flex-direction: column;
+                gap: 4px;
+            }
+
+            /* 로그 */
+            .log-list {
+                max-height: 150px;
+                font-size: 0.8em;
+            }
+
+            /* 모달 */
+            .modal-content {
+                width: 95%;
+                margin: 10% auto;
+                padding: 15px;
+            }
+
+            .modal-content h3 {
+                font-size: 1.1em;
+            }
+
+            /* 선택된 코인 표시 */
             .selected-coin .symbol {
                 font-size: 1.5em;
             }
 
             .selected-coin .price {
                 font-size: 1.8em;
+            }
+        }
+
+        /* 반응형 - 초소형 모바일 */
+        @media (max-width: 360px) {
+            .header h1 {
+                font-size: 1em;
+            }
+
+            .coin-item {
+                padding: 8px 10px;
+                font-size: 13px;
+            }
+
+            #chartContainer {
+                height: 240px !important;
+            }
+
+            .btn {
+                padding: 12px 14px;
+                font-size: 14px;
+            }
+        }
+
+        /* 가로 모드 모바일 */
+        @media (max-height: 500px) and (orientation: landscape) {
+            .header {
+                padding: 8px 15px;
+            }
+
+            .header h1 {
+                font-size: 1em;
+                margin-bottom: 2px;
+            }
+
+            #chartContainer {
+                height: 200px !important;
+            }
+
+            .coin-list {
+                max-height: 120px;
+            }
+        }
+
+        /* PWA 홈 화면 추가 시 safe area 처리 */
+        @supports (padding: max(0px)) {
+            .header {
+                padding-top: max(15px, env(safe-area-inset-top));
+            }
+
+            .container {
+                padding-bottom: max(15px, env(safe-area-inset-bottom));
             }
         }
     </style>
@@ -647,7 +831,64 @@
 
     <script>
         // ==================== 전역 변수 ====================
-        const BINANCE_FUTURES_URL = 'https://fapi.binance.com';
+        const BINANCE_FUTURES_URL_DIRECT = 'https://fapi.binance.com';
+
+        // CORS 프록시 목록 (순서대로 시도)
+        const CORS_PROXIES = [
+            '',  // 직접 연결 (로컬호스트)
+            'https://corsproxy.io/?',
+            'https://api.allorigins.win/raw?url=',
+            'https://cors-anywhere.herokuapp.com/'
+        ];
+
+        let currentProxyIndex = 0;
+        let BINANCE_FUTURES_URL = BINANCE_FUTURES_URL_DIRECT;
+
+        // 현재 환경 감지 (로컬 vs GitHub Pages)
+        function isLocalhost() {
+            return window.location.hostname === 'localhost' ||
+                   window.location.hostname === '127.0.0.1' ||
+                   window.location.hostname === '::1' ||
+                   window.location.protocol === 'file:';
+        }
+
+        // CORS 프록시 적용 URL 생성
+        function getProxiedUrl(url) {
+            if (isLocalhost()) {
+                return url;  // 로컬에서는 프록시 불필요
+            }
+            const proxy = CORS_PROXIES[currentProxyIndex];
+            if (!proxy) return url;
+            return proxy + encodeURIComponent(url);
+        }
+
+        // 다음 프록시로 전환
+        function switchToNextProxy() {
+            currentProxyIndex = (currentProxyIndex + 1) % CORS_PROXIES.length;
+            console.log('프록시 전환:', CORS_PROXIES[currentProxyIndex] || '직접 연결');
+        }
+
+        // CORS 대응 fetch wrapper
+        async function corsFetch(url, options = {}) {
+            const maxRetries = CORS_PROXIES.length;
+            let lastError = null;
+
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const proxiedUrl = getProxiedUrl(url);
+                    const res = await fetch(proxiedUrl, options);
+                    if (res.ok || res.status === 400 || res.status === 401) {
+                        return res;  // 성공 또는 API 에러 (CORS 아님)
+                    }
+                    throw new Error(`HTTP ${res.status}`);
+                } catch (e) {
+                    lastError = e;
+                    console.warn(`프록시 ${currentProxyIndex} 실패:`, e.message);
+                    switchToNextProxy();
+                }
+            }
+            throw lastError || new Error('모든 프록시 실패');
+        }
 
         let apiKey = localStorage.getItem('binance_api_key') || '';
         let apiSecret = localStorage.getItem('binance_api_secret') || '';
@@ -664,7 +905,7 @@
         // 서버 시간 동기화
         async function syncServerTime() {
             try {
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/time`);
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/time`);
                 const data = await res.json();
                 serverTimeOffset = Date.now() - data.serverTime;
                 console.log('서버 시간 동기화 완료, 오프셋:', serverTimeOffset, 'ms');
@@ -820,6 +1061,10 @@
 
         // ==================== 초기화 ====================
         document.addEventListener('DOMContentLoaded', async () => {
+            // 환경 정보 표시
+            const envInfo = isLocalhost() ? '로컬' : 'GitHub Pages';
+            console.log(`환경: ${envInfo}, 프록시: ${CORS_PROXIES[currentProxyIndex] || '직접 연결'}`);
+
             // 서버 시간 동기화 먼저 실행
             await syncServerTime();
 
@@ -873,11 +1118,12 @@
                 apiSecret = secret;
             }
 
-            log('바이낸스 연결 중...', 'info');
+            const envInfo = isLocalhost() ? '로컬' : 'GitHub Pages';
+            log(`바이낸스 연결 중... (${envInfo})`, 'info');
 
             try {
                 // Ping 테스트
-                const ping = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/ping`);
+                const ping = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/ping`);
                 if (!ping.ok) throw new Error('Ping 실패');
 
                 // 계정 정보 확인 (서명 필요)
@@ -885,8 +1131,8 @@
                 const params = `timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
-                const account = await fetch(
-                    `${BINANCE_FUTURES_URL}/fapi/v2/account?${params}&signature=${signature}`,
+                const account = await corsFetch(
+                    `${BINANCE_FUTURES_URL_DIRECT}/fapi/v2/account?${params}&signature=${signature}`,
                     { headers: { 'X-MBX-APIKEY': apiKey } }
                 );
 
@@ -904,7 +1150,7 @@
 
                 isConnected = true;
                 updateStatus(true, `연결됨 (잔고: $${balance})`);
-                log(`연결 성공! 잔고: $${balance} USDT`, 'success');
+                log(`연결 성공! 잔고: $${balance} USDT (${envInfo})`, 'success');
 
                 // API 카드 숨기기
                 document.getElementById('apiCard').style.display = 'none';
@@ -916,8 +1162,14 @@
                 setTimeout(restoreAveragingStates, 1000);
 
             } catch (e) {
-                log(`연결 실패: ${e.message}`, 'error');
+                const proxyInfo = CORS_PROXIES[currentProxyIndex] ? `프록시: ${currentProxyIndex}` : '직접 연결';
+                log(`연결 실패: ${e.message} (${proxyInfo})`, 'error');
                 updateStatus(false, '연결 실패');
+
+                // GitHub Pages에서 실패 시 도움말 표시
+                if (!isLocalhost()) {
+                    log('💡 GitHub Pages에서는 CORS 제한이 있을 수 있습니다.', 'info');
+                }
             }
         }
 
@@ -948,7 +1200,7 @@
             log(`${coin} 확인 중...`, 'info');
 
             try {
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/ticker/price?symbol=${coin}`);
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/ticker/price?symbol=${coin}`);
                 if (!res.ok) throw new Error('존재하지 않는 심볼');
 
                 const data = await res.json();
@@ -1070,7 +1322,7 @@
         // ==================== 가격 업데이트 ====================
         async function updatePrice(coin) {
             try {
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/ticker/price?symbol=${coin}`);
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/ticker/price?symbol=${coin}`);
                 const data = await res.json();
                 prices[coin] = parseFloat(data.price);
 
@@ -1092,7 +1344,7 @@
         // 특정 타임프레임의 볼린저밴드 상단 체크
         async function checkBBForTimeframe(coin, interval) {
             try {
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${coin}&interval=${interval}&limit=21`);
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/klines?symbol=${coin}&interval=${interval}&limit=21`);
                 const klines = await res.json();
 
                 if (klines.length < 21) return false;
@@ -1162,7 +1414,7 @@
         // 일봉 개수로 상장일 확인 (30일 이하)
         async function isNewListing(symbol) {
             try {
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=${MAX_LISTING_DAYS + 1}`);
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/klines?symbol=${symbol}&interval=1d&limit=${MAX_LISTING_DAYS + 1}`);
                 if (!res.ok) return false;
                 const data = await res.json();
                 return data.length <= MAX_LISTING_DAYS;
@@ -1178,7 +1430,7 @@
                 const timestamp = getServerTimestamp();
                 const params = `recvWindow=60000&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v2/positionRisk?${params}&signature=${signature}`, {
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v2/positionRisk?${params}&signature=${signature}`, {
                     headers: { 'X-MBX-APIKEY': apiKey }
                 });
                 if (!res.ok) return;
@@ -1206,7 +1458,7 @@
 
             try {
                 // 1. 바이낸스 선물 전체 심볼 조회
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/exchangeInfo`);
                 const data = await res.json();
                 const allSymbols = data.symbols
                     .filter(s => s.status === 'TRADING' && s.contractType === 'PERPETUAL')
@@ -1296,7 +1548,7 @@
                 const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v2/positionRisk?${params}&signature=${signature}`, {
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v2/positionRisk?${params}&signature=${signature}`, {
                     headers: { 'X-MBX-APIKEY': apiKey }
                 });
 
@@ -1318,7 +1570,7 @@
                 const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/openOrders?${params}&signature=${signature}`, {
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/openOrders?${params}&signature=${signature}`, {
                     headers: { 'X-MBX-APIKEY': apiKey }
                 });
 
@@ -1334,7 +1586,7 @@
         // 바이낸스 4시간봉 데이터 가져오기
         async function getKlines(symbol, limit = 100) {
             try {
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/klines?symbol=${symbol}&interval=4h&limit=${limit}`);
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/klines?symbol=${symbol}&interval=4h&limit=${limit}`);
                 const data = await res.json();
                 return data.map(k => ({
                     time: k[0] / 1000,
@@ -1561,7 +1813,7 @@
                 const currentPrice = prices[symbol];
 
                 // 심볼 정보 조회
-                const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
+                const exchangeInfo = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/exchangeInfo`);
                 const exchangeData = await exchangeInfo.json();
                 const symbolInfo = exchangeData.symbols.find(s => s.symbol === symbol);
 
@@ -1676,7 +1928,7 @@
             try {
                 const marginParams = `symbol=${symbol}&marginType=ISOLATED&timestamp=${timestamp}`;
                 const marginSig = CryptoJS.HmacSHA256(marginParams, apiSecret).toString();
-                const marginRes = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/marginType?${marginParams}&signature=${marginSig}`, {
+                const marginRes = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/marginType?${marginParams}&signature=${marginSig}`, {
                     method: 'POST',
                     headers: { 'X-MBX-APIKEY': apiKey }
                 });
@@ -1695,7 +1947,7 @@
             const params = `symbol=${symbol}&leverage=${leverage}&timestamp=${timestamp + 1}`;
             const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
-            const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/leverage?${params}&signature=${signature}`, {
+            const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/leverage?${params}&signature=${signature}`, {
                 method: 'POST',
                 headers: { 'X-MBX-APIKEY': apiKey }
             });
@@ -1725,7 +1977,7 @@
 
             console.log('Order params:', params);
 
-            const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/order?${params}&signature=${signature}`, {
+            const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/order?${params}&signature=${signature}`, {
                 method: 'POST',
                 headers: { 'X-MBX-APIKEY': apiKey }
             });
@@ -1767,7 +2019,7 @@
                 const params = `symbol=${symbol}&recvWindow=60000&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/allOpenOrders?${params}&signature=${signature}`, {
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/allOpenOrders?${params}&signature=${signature}`, {
                     method: 'DELETE',
                     headers: { 'X-MBX-APIKEY': apiKey }
                 });
@@ -2273,7 +2525,7 @@
             }
 
             try {
-                const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
+                const exchangeInfo = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/exchangeInfo`);
                 const exchangeData = await exchangeInfo.json();
                 const symbolInfo = exchangeData.symbols.find(s => s.symbol === symbol);
 
@@ -2335,7 +2587,7 @@
             }
 
             try {
-                const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
+                const exchangeInfo = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/exchangeInfo`);
                 const exchangeData = await exchangeInfo.json();
                 const symbolInfo = exchangeData.symbols.find(s => s.symbol === symbol);
 
@@ -2387,7 +2639,7 @@
             if (!state || !state.position) return;
 
             try {
-                const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
+                const exchangeInfo = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/exchangeInfo`);
                 const exchangeData = await exchangeInfo.json();
                 const symbolInfo = exchangeData.symbols.find(s => s.symbol === symbol);
 
@@ -2414,13 +2666,13 @@
             }
         }
 
-        // 익절 배치 - 체결가 기준 -4% (숏 주문가 기준 -2%)
+        // 익절 배치 - 체결가 기준 -2% = 2% 수익
         async function placeOnlyTpOrderAtPrice(symbol, fillPrice) {
             const state = averagingStates[symbol];
             if (!state || !state.position) return;
 
             try {
-                const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
+                const exchangeInfo = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/exchangeInfo`);
                 const exchangeData = await exchangeInfo.json();
                 const symbolInfo = exchangeData.symbols.find(s => s.symbol === symbol);
 
@@ -2454,7 +2706,7 @@
             if (!state) return;
 
             try {
-                const exchangeInfo = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/exchangeInfo`);
+                const exchangeInfo = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/exchangeInfo`);
                 const exchangeData = await exchangeInfo.json();
                 const symbolInfo = exchangeData.symbols.find(s => s.symbol === symbol);
 
@@ -2484,7 +2736,7 @@
                 const params = `symbol=${symbol}&orderId=${orderId}&timestamp=${timestamp}`;
                 const signature = CryptoJS.HmacSHA256(params, apiSecret).toString();
 
-                const res = await fetch(`${BINANCE_FUTURES_URL}/fapi/v1/order?${params}&signature=${signature}`, {
+                const res = await corsFetch(`${BINANCE_FUTURES_URL_DIRECT}/fapi/v1/order?${params}&signature=${signature}`, {
                     method: 'DELETE',
                     headers: { 'X-MBX-APIKEY': apiKey }
                 });

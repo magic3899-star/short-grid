@@ -1023,6 +1023,16 @@
 
             // 물타기 카드 업데이트 (포지션 있으면 표시)
             await updateAveragingCard(coin);
+
+            // 물타기 진행 중이면 상태창 강제 표시
+            if (averagingStates[coin]?.isActive) {
+                const state = averagingStates[coin];
+                if (state.position) {
+                    currentPosition = state.position;
+                }
+                updateAveragingCardUI(coin);
+                updateAvgProgress(coin);
+            }
         }
 
         function renderCoinList() {

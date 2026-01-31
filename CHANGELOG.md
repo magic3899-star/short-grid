@@ -2,6 +2,24 @@
 
 ## 2026-02-01
 
+### 매매 기록 저장 기능 (v2.1)
+- **trades.json**에 모든 매매 기록 자동 저장
+- 기록 유형:
+  - `grid_entry`: 그리드 1차 진입
+  - `grid_add`: 그리드 추가 주문
+  - `averaging_short`: 물타기 숏 주문
+  - `averaging_short_filled`: 물타기 숏 체결
+  - `averaging_tp`: 물타기 익절 주문
+  - `averaging_tp_filled`: 물타기 익절 체결 (수익 기록)
+- API 엔드포인트:
+  - `GET /api/trades` - 매매 기록 조회 (symbol, type 필터)
+  - `GET /api/trades/summary` - 매매 요약 (총 수익, 거래 수)
+  - `POST /api/trades/clear` - 기록 초기화
+
+### 포지션 청산 시 자동 종료
+- 수동으로 포지션 전체 청산 시 해당 종목 물타기 자동 정지
+- 30초마다 포지션 체크하여 청산 감지
+
 ### Python 서버 완전 전환 (v2.0)
 - 기존 JavaScript 웹앱에서 **Python Flask 서버**로 완전 전환
 - 웹 UI도 Python API를 통해서만 동작 (클라이언트에서 직접 바이낸스 호출 없음)

@@ -601,6 +601,14 @@
                     </div>
                 </div>
             </div>
+
+            <!-- 물타기 상세 정보 -->
+            <div id="avgDetailCard" style="margin-top:10px; padding:12px; background:#0d1117; border:1px solid #30363d; border-radius:6px; font-size:12px; display:none;">
+                <div style="color:#58a6ff; margin-bottom:10px; font-weight:bold;">📋 물타기 상세</div>
+                <div id="avgDetailInfo" style="color:#c9d1d9; line-height:1.8;">
+                    <!-- 동적으로 채워짐 -->
+                </div>
+            </div>
         </div>
 
         <!-- 데이터 내보내기/가져오기 -->
@@ -1975,6 +1983,7 @@
             document.getElementById('forceTpBtn').style.display = isActive ? 'block' : 'none';
             document.getElementById('avgStatus').style.display = isActive ? 'block' : 'none';
             document.getElementById('avgProgressCard').style.display = isActive ? 'block' : 'none';
+            document.getElementById('avgDetailCard').style.display = isActive ? 'block' : 'none';
 
             if (isActive) {
                 updateAvgProgress(symbol);
@@ -2498,6 +2507,110 @@
             const pnlColor = pnlChange > 0 ? '#7ee787' : pnlChange < 0 ? '#f85149' : '#8b949e';
             document.getElementById('avgPnLChange').innerHTML =
                 `<span style="color:${pnlColor}">${pnlChange >= 0 ? '+' : ''}$${pnlChange.toFixed(2)}</span>`;
+
+            // 상세 정보 업데이트
+            updateAvgDetailInfo(symbol, state, position);
+        }
+
+        // 물타기 상세 정보 업데이트
+        async function updateAvgDetailInfo(symbol, state, position) {
+            const detailCard = document.getElementById('avgDetailCard');
+            const detailInfo = document.getElementById('avgDetailInfo');
+
+            if (!state || !state.isActive) {
+                detailCard.style.display = 'none';
+                return;
+            }
+
+            detailCard.style.display = 'block';
+
+            const currentQty = Math.abs(parseFloat(position.positionAmt));
+            const currentEntry = parseFloat(position.entryPrice);
+            const currentPnL = parseFloat(position.unRealizedProfit);
+            const currentPrice = prices[symbol] || 0;
+
+            // 물타기로 추가된 수량
+            const addedQty = currentQty - state.startQty;
+            const hasAdded = addedQty > 0;
+
+            // 물타기 진입 금액 (추가 수량 × 현재 평단 / 레버리지)
+            const avgEntryAmount = hasAdded ? (addedQty * currentEntry / 2) : 0;
+
+            // 물타기 수익/손실 계산 (숏이므로 평단 - 현재가)
+            const avgPnL = hasAdded ? addedQty * (currentEntry - currentPrice) : 0;
+
+            // 숏 오픈오더 가격
+            const shortOrderPrice = state.shortOrderPrice || (state.startEntry * (1 + avgInterval / 100));
+
+            // 오픈오더 조회
+            let openOrders = [];
+            try {
+                openOrders = await getOpenOrders(symbol);
+            } catch (e) {}
+
+            const shortOrders = openOrders.filter(o => o.positionSide === 'SHORT' && o.side === 'SELL');
+            const tpOrders = openOrders.filter(o => o.positionSide === 'SHORT' && o.side === 'BUY');
+
+            let html = '';
+
+            // 기준가 정보
+            html += `<div style="padding:8px; background:#21262d; border-radius:4px; margin-bottom:8px;">`;
+            html += `<div style="color:#8b949e; margin-bottom:4px;">📍 기준가 (물타기 시작)</div>`;
+            html += `<div style="font-size:14px; color:#58a6ff;">$${state.startEntry.toFixed(4)}</div>`;
+            html += `</div>`;
+
+            // 물타기 진입 현황
+            html += `<div style="padding:8px; background:#21262d; border-radius:4px; margin-bottom:8px;">`;
+            html += `<div style="color:#8b949e; margin-bottom:4px;">💰 물타기 진입 현황</div>`;
+            if (hasAdded) {
+                html += `<div>추가 수량: <span style="color:#f0883e;">${addedQty.toFixed(0)}개</span></div>`;
+                html += `<div>진입 평단: <span style="color:#58a6ff;">$${currentEntry.toFixed(4)}</span></div>`;
+                html += `<div>투입 마진: <span style="color:#c9d1d9;">$${avgEntryAmount.toFixed(2)}</span> (2배 레버리지)</div>`;
+                const avgPnLColor = avgPnL >= 0 ? '#7ee787' : '#f85149';
+                html += `<div>물타기 손익: <span style="color:${avgPnLColor};">${avgPnL >= 0 ? '+' : ''}$${avgPnL.toFixed(2)}</span></div>`;
+            } else {
+                html += `<div style="color:#8b949e;">아직 물타기 체결 없음</div>`;
+            }
+            html += `</div>`;
+
+            // 숏 오픈오더 현황
+            html += `<div style="padding:8px; background:#21262d; border-radius:4px; margin-bottom:8px;">`;
+            html += `<div style="color:#8b949e; margin-bottom:4px;">📈 숏 오픈오더</div>`;
+            if (shortOrders.length > 0) {
+                for (const order of shortOrders) {
+                    const price = parseFloat(order.price);
+                    const qty = parseFloat(order.origQty);
+                    const pctFromCurrent = ((price / currentPrice - 1) * 100).toFixed(2);
+                    html += `<div>$${price.toFixed(4)} × ${qty.toFixed(0)} <span style="color:#8b949e;">(현재가 +${pctFromCurrent}%)</span></div>`;
+                }
+            } else {
+                html += `<div>대기가: <span style="color:#f0883e;">$${shortOrderPrice.toFixed(4)}</span> <span style="color:#8b949e;">(현재가 +${((shortOrderPrice / currentPrice - 1) * 100).toFixed(2)}%)</span></div>`;
+                html += `<div style="color:#8b949e;">주문 없음 (가격 도달 시 배치)</div>`;
+            }
+            html += `</div>`;
+
+            // 익절 오픈오더 현황
+            html += `<div style="padding:8px; background:#21262d; border-radius:4px;">`;
+            html += `<div style="color:#8b949e; margin-bottom:4px;">📉 익절 오픈오더</div>`;
+            if (tpOrders.length > 0) {
+                for (const order of tpOrders) {
+                    const price = parseFloat(order.price);
+                    const qty = parseFloat(order.origQty);
+                    const pctFromCurrent = ((1 - price / currentPrice) * 100).toFixed(2);
+                    const expectedProfit = qty * (currentEntry - price);
+                    html += `<div>$${price.toFixed(4)} × ${qty.toFixed(0)} <span style="color:#8b949e;">(현재가 -${pctFromCurrent}%)</span></div>`;
+                    html += `<div style="color:#7ee787; margin-left:10px;">→ 체결 시 +$${expectedProfit.toFixed(2)} 예상</div>`;
+                }
+            } else {
+                if (hasAdded) {
+                    const expectedTpPrice = currentEntry * (1 - avgTpInterval / 100);
+                    html += `<div>예정가: <span style="color:#7ee787;">$${expectedTpPrice.toFixed(4)}</span> <span style="color:#8b949e;">(평단 -${avgTpInterval}%)</span></div>`;
+                }
+                html += `<div style="color:#8b949e;">주문 없음 (숏 체결 후 배치)</div>`;
+            }
+            html += `</div>`;
+
+            detailInfo.innerHTML = html;
         }
     </script>
 </body>

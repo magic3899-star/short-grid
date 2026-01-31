@@ -911,7 +911,7 @@
 
         // 물타기 상태 (심볼별로 독립 관리, 최대 3개)
         const MAX_AVERAGING = 3;
-        let averagingStates = {};  // { symbol: { isActive, checkInterval, position, lastQty, lastEntry, startQty, startEntry, startPnL, shortOrderPrice } }
+        let averagingStates = {};  // { symbol: { isActive, checkInterval, position, lastQty, lastEntry, startQty, startEntry, startPnL, shortOrderPrice, realizedProfit, tpCount } }
 
         // 물타기 상태 localStorage 저장
         function saveAveragingStates() {
@@ -926,7 +926,9 @@
                         startPnL: state.startPnL,
                         shortOrderPrice: state.shortOrderPrice,
                         lastQty: state.lastQty,
-                        lastEntry: state.lastEntry
+                        lastEntry: state.lastEntry,
+                        realizedProfit: state.realizedProfit || 0,
+                        tpCount: state.tpCount || 0
                     };
                 }
             }
@@ -981,7 +983,9 @@
                     startQty: savedState.startQty || positionQty,
                     startEntry: savedState.startEntry || entryPrice,
                     startPnL: savedState.startPnL || 0,
-                    shortOrderPrice: savedState.shortOrderPrice || (savedState.startEntry * (1 + avgInterval / 100))
+                    shortOrderPrice: savedState.shortOrderPrice || (savedState.startEntry * (1 + avgInterval / 100)),
+                    realizedProfit: savedState.realizedProfit || 0,
+                    tpCount: savedState.tpCount || 0
                 };
 
                 log(`${symbol} 물타기 복원 완료 - 기준가: $${savedState.startEntry?.toFixed(4)}`, 'success');
@@ -2753,7 +2757,17 @@
                     // 숏 체결됨 → 체결가(현재 평단) 기준 -4%에 익절 주문
                     await placeOnlyTpOrderAtPrice(symbol, currentEntry);
                 } else if (isTpFill) {
-                    // 익절 체결됨 → 새 현재가 기준으로 +2% 숏 주문
+                    // 익절 체결됨 → 실현 수익 계산
+                    const filledQty = state.lastQty - currentQty;  // 익절된 수량
+                    const tpProfit = filledQty * state.lastEntry * (avgTpInterval / 100);  // 2% 수익
+
+                    // 실현 수익 누적
+                    state.realizedProfit = (state.realizedProfit || 0) + tpProfit;
+                    state.tpCount = (state.tpCount || 0) + 1;
+
+                    log(`${symbol} 익절 실현: +$${tpProfit.toFixed(2)} (총 ${state.tpCount}회, 누적 +$${state.realizedProfit.toFixed(2)})`, 'success');
+
+                    // 새 현재가 기준으로 +2% 숏 주문
                     state.startEntry = currentPrice;
                     state.startQty = currentQty;
                     state.shortOrderPrice = currentPrice * (1 + avgInterval / 100);
@@ -2920,10 +2934,32 @@
 
             let html = '';
 
-            // 기준가 정보
+            // 물타기 실현 수익 (맨 위에 강조)
+            const realizedProfit = state.realizedProfit || 0;
+            const tpCount = state.tpCount || 0;
+            if (realizedProfit > 0 || tpCount > 0) {
+                html += `<div style="padding:10px; background:linear-gradient(135deg, #238636 0%, #2ea043 100%); border-radius:6px; margin-bottom:10px; text-align:center;">`;
+                html += `<div style="color:#fff; font-size:11px; margin-bottom:4px;">💵 물타기 총 실현 수익</div>`;
+                html += `<div style="color:#fff; font-size:20px; font-weight:bold;">+$${realizedProfit.toFixed(2)}</div>`;
+                html += `<div style="color:rgba(255,255,255,0.8); font-size:11px;">${tpCount}회 익절 성공</div>`;
+                html += `</div>`;
+            }
+
+            // 평단 변화 (시작 → 현재)
+            const entryChange = currentEntry - state.startEntry;
+            const entryChangePct = ((currentEntry / state.startEntry - 1) * 100);
+            const entryImproved = entryChange > 0;  // 숏이므로 평단이 올라가면 유리
+
             html += `<div style="padding:8px; background:#21262d; border-radius:4px; margin-bottom:8px;">`;
-            html += `<div style="color:#8b949e; margin-bottom:4px;">📍 기준가 (물타기 시작)</div>`;
-            html += `<div style="font-size:14px; color:#58a6ff;">$${state.startEntry.toFixed(4)}</div>`;
+            html += `<div style="color:#8b949e; margin-bottom:4px;">📊 평단 변화</div>`;
+            html += `<div style="display:flex; justify-content:space-between; align-items:center;">`;
+            html += `<div><span style="color:#8b949e;">시작</span> <span style="color:#f0883e;">$${state.startEntry.toFixed(4)}</span></div>`;
+            html += `<div style="color:#8b949e;">→</div>`;
+            html += `<div><span style="color:#8b949e;">현재</span> <span style="color:#58a6ff;">$${currentEntry.toFixed(4)}</span></div>`;
+            html += `</div>`;
+            const changeColor = entryImproved ? '#7ee787' : '#f85149';
+            const changeIcon = entryImproved ? '📈' : '📉';
+            html += `<div style="margin-top:6px; color:${changeColor}; font-size:13px;">${changeIcon} ${entryImproved ? '+' : ''}${entryChangePct.toFixed(2)}% (${entryImproved ? '숏에 유리' : '숏에 불리'})</div>`;
             html += `</div>`;
 
             // 물타기 진입 현황

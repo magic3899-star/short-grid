@@ -729,11 +729,13 @@
                 }
             }
             localStorage.setItem('averaging_states', JSON.stringify(toSave));
+            console.log('물타기 상태 저장:', toSave);
         }
 
         // 물타기 상태 localStorage 복원
         function loadAveragingStates() {
             const saved = localStorage.getItem('averaging_states');
+            console.log('물타기 상태 로드:', saved);
             if (!saved) return {};
             try {
                 return JSON.parse(saved);
@@ -747,9 +749,12 @@
             const saved = loadAveragingStates();
             const symbols = Object.keys(saved);
 
-            if (symbols.length === 0) return;
+            if (symbols.length === 0) {
+                log('저장된 물타기 상태 없음', 'info');
+                return;
+            }
 
-            log(`물타기 상태 복원 중... (${symbols.length}개)`, 'info');
+            log(`물타기 상태 복원 중... (${symbols.length}개: ${symbols.join(', ')})`, 'info');
 
             for (const symbol of symbols) {
                 const savedState = saved[symbol];

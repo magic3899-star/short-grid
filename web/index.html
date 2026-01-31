@@ -693,7 +693,92 @@
 
         // 물타기 상태 (심볼별로 독립 관리, 최대 3개)
         const MAX_AVERAGING = 3;
-        let averagingStates = {};  // { symbol: { isActive, checkInterval, position, lastQty, lastEntry, startQty, startEntry, startPnL } }
+        let averagingStates = {};  // { symbol: { isActive, checkInterval, position, lastQty, lastEntry, startQty, startEntry, startPnL, shortOrderPrice } }
+
+        // 물타기 상태 localStorage 저장
+        function saveAveragingStates() {
+            const toSave = {};
+            for (const symbol of Object.keys(averagingStates)) {
+                const state = averagingStates[symbol];
+                if (state.isActive) {
+                    toSave[symbol] = {
+                        isActive: state.isActive,
+                        startQty: state.startQty,
+                        startEntry: state.startEntry,
+                        startPnL: state.startPnL,
+                        shortOrderPrice: state.shortOrderPrice,
+                        lastQty: state.lastQty,
+                        lastEntry: state.lastEntry
+                    };
+                }
+            }
+            localStorage.setItem('averaging_states', JSON.stringify(toSave));
+        }
+
+        // 물타기 상태 localStorage 복원
+        function loadAveragingStates() {
+            const saved = localStorage.getItem('averaging_states');
+            if (!saved) return {};
+            try {
+                return JSON.parse(saved);
+            } catch (e) {
+                return {};
+            }
+        }
+
+        // 물타기 복원 (API 연결 후 호출)
+        async function restoreAveragingStates() {
+            const saved = loadAveragingStates();
+            const symbols = Object.keys(saved);
+
+            if (symbols.length === 0) return;
+
+            log(`물타기 상태 복원 중... (${symbols.length}개)`, 'info');
+
+            for (const symbol of symbols) {
+                const savedState = saved[symbol];
+
+                // 포지션 확인
+                const position = await getPosition(symbol);
+                if (!position || parseFloat(position.positionAmt) === 0) {
+                    log(`${symbol} 포지션 없음 - 물타기 복원 스킵`, 'info');
+                    continue;
+                }
+
+                const positionQty = Math.abs(parseFloat(position.positionAmt));
+                const entryPrice = parseFloat(position.entryPrice);
+
+                // 상태 복원 (새 주문 없이)
+                averagingStates[symbol] = {
+                    isActive: true,
+                    checkInterval: null,
+                    position: position,
+                    lastQty: savedState.lastQty || positionQty,
+                    lastEntry: savedState.lastEntry || entryPrice,
+                    startQty: savedState.startQty || positionQty,
+                    startEntry: savedState.startEntry || entryPrice,
+                    startPnL: savedState.startPnL || 0,
+                    shortOrderPrice: savedState.shortOrderPrice || (savedState.startEntry * (1 + avgInterval / 100))
+                };
+
+                log(`${symbol} 물타기 복원 완료 - 기준가: $${savedState.startEntry?.toFixed(4)}`, 'success');
+
+                // 30초마다 체크 시작 (새 주문 배치 없이 모니터링만)
+                averagingStates[symbol].checkInterval = setInterval(async () => {
+                    if (averagingStates[symbol]?.isActive) {
+                        await checkAndRefreshAveragingOrders(symbol);
+                    }
+                }, 30000);
+            }
+
+            // UI 업데이트
+            renderActiveAveragingList();
+            if (selectedCoin && averagingStates[selectedCoin]) {
+                updateAveragingCardUI(selectedCoin);
+            }
+
+            saveAveragingStates();
+        }
 
         // 현재 선택된 코인의 포지션 (UI 표시용)
         let currentPosition = null;
@@ -791,6 +876,9 @@
 
                 // 가격 업데이트
                 updateAllPrices();
+
+                // 물타기 상태 복원 (새 주문 없이 모니터링만)
+                setTimeout(restoreAveragingStates, 1000);
 
             } catch (e) {
                 log(`연결 실패: ${e.message}`, 'error');
@@ -1971,6 +2059,9 @@
                 }
             }, 30000);
 
+            // 상태 저장
+            saveAveragingStates();
+
             // UI 업데이트
             updateAveragingCardUI(symbol);
             renderActiveAveragingList();
@@ -1989,6 +2080,9 @@
 
             // 상태 삭제
             delete averagingStates[symbol];
+
+            // 상태 저장
+            saveAveragingStates();
 
             // 저장된 시작 상태 삭제
             localStorage.removeItem(`avgStart_${symbol}`);
@@ -2304,6 +2398,9 @@
 
                 state.lastQty = currentQty;
                 state.lastEntry = currentEntry;
+
+                // 상태 저장
+                saveAveragingStates();
             } else {
                 // 포지션 변화 없음 → 숏 오픈오더 따라가기 체크
                 const shortOrderPrice = state.shortOrderPrice || (state.startEntry * (1 + avgInterval / 100));
@@ -2320,6 +2417,9 @@
                     localStorage.setItem(`avgStart_${symbol}`, JSON.stringify({
                         qty: state.startQty, entry: state.startEntry, pnl: parseFloat(position.unRealizedProfit)
                     }));
+
+                    // 상태 저장
+                    saveAveragingStates();
 
                     await placeOnlyShortOrder(symbol);
                 } else {

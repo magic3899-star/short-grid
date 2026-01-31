@@ -1,84 +1,105 @@
-# SHORT GRID ORDER - 변경 이력
+# 물타기 봇 - 변경 이력
+
+## 2026-02-01
+
+### Python 서버 완전 전환 (v2.0)
+- 기존 JavaScript 웹앱에서 **Python Flask 서버**로 완전 전환
+- 웹 UI도 Python API를 통해서만 동작 (클라이언트에서 직접 바이낸스 호출 없음)
+- 24시간 서버 운영 가능 (PC 종료해도 동작)
+- 서버 재시작 시 물타기 상태 자동 복원
+
+### 서버 구조
+```
+/root/trading_bot/
+├── server.py           # Flask 웹서버 + 물타기 봇 + 모든 API
+├── config.py           # API 키, 설정값
+├── requirements.txt    # Python 패키지
+├── averaging_state.json    # 물타기 상태 저장
+├── watchlist.json      # 워치리스트 저장
+└── static/
+    └── index.html      # 웹 UI (Python API 연동)
+```
+
+### API 엔드포인트
+- `GET /api/status` - 서버 상태
+- `GET /api/positions` - 전체 포지션
+- `GET /api/position/<symbol>` - 개별 포지션
+- `GET /api/orders` - 오픈오더
+- `POST /api/order/create` - 주문 생성
+- `POST /api/order/cancel` - 주문 취소
+- `POST /api/order/cancel_all` - 전체 취소
+- `GET /api/prices` - 전체 가격
+- `GET /api/price/<symbol>` - 개별 가격
+- `GET /api/klines/<symbol>` - 차트 데이터
+- `GET /api/bb/<symbol>` - 볼린저밴드
+- `GET /api/bb/scan` - BB 상단 스캔
+- `GET /api/watchlist` - 워치리스트
+- `POST /api/watchlist/add` - 워치리스트 추가
+- `POST /api/watchlist/remove` - 워치리스트 삭제
+- `GET /api/grid/settings` - 그리드 설정
+- `POST /api/grid/settings` - 그리드 설정 변경
+- `POST /api/grid/place` - 그리드 주문 실행
+- `GET /api/averaging/list` - 물타기 목록
+- `POST /api/averaging/start` - 물타기 시작
+- `POST /api/averaging/stop` - 물타기 정지
+- `POST /api/averaging/force_tp` - 강제 익절
+- `POST /api/averaging/fix_tp` - 주문 재배치
+- `POST /api/averaging/set_base` - 기준가 설정
+- `GET /api/averaging/state/<symbol>` - 물타기 상태
+- `GET /api/symbol/<symbol>` - 심볼 정보
+- `GET /api/logs` - 로그 조회
+- `GET /api/config` - 설정값
+
+### 물타기 로직
+- **추가숏**: 기준가 +2% 지점에 숏 주문
+- **익절**: 물타기 진입가 -2% 지점에 추가 수량만큼 매수
+- **30초마다** 포지션 체크 및 주문 갱신
+- **가격 하락 시** 숏 주문 따라가기
+- **익절 체결 후** 새 사이클 자동 시작
+
+### 그리드 주문
+- 1차 진입 (시장가 or 지정가)
+- 추가 주문 (간격 % 설정 가능)
+- 레버리지 설정 (기본 2배 격리)
+
+### 설정값 (config.py)
+```python
+AVG_INTERVAL = 2      # 추가숏 간격 % (기준가 +2%)
+AVG_TP_INTERVAL = 2   # 익절 간격 % (물타기 진입가 -2%)
+AVG_AMOUNT = 10       # 물타기 금액 ($)
+CHECK_INTERVAL = 30   # 체크 간격 (초)
+```
+
+### 접속 주소
+- **http://fundauto.cafe24.com** (포트 80)
+
+---
+
+## 2026-01-31
+
+### TP 계산 버그 수정
+- TP 가격: 전체 평단이 아닌 **물타기 진입가** 기준으로 수정
+- TP 수량: `avgAmount * 2 / price`가 아닌 **addedQty(물타기 수량)** 사용
+
+---
 
 ## 2026-01-29
 
 ### 물타기 모드 추가
 - 손실 포지션 평단 낮추기 전략
-- 추가 숏: 평단 +2% 지점에 $500 숏 주문
-- 익절: 평단 -2% 지점에 추가된 수량만큼 매수
-- 원금 보호: 물타기 시작 시점 수량(avgStartQty)은 익절 대상에서 제외
+- 추가 숏: 평단 +2% 지점에 숏 주문
+- 익절: 물타기 진입가 -2% 지점에 추가된 수량만큼 매수
+- 원금 보호: 물타기 시작 시점 수량은 익절 대상에서 제외
 - 사이클 반복: 익절 체결 → 새 추가숏/익절 주문 자동 생성
-- 효과 표시: 시작 상태 vs 현재 상태 비교 (수량, 평단, 손익)
-
-### 추가 주문 기준 변경
-- 시장가(0%): 현재가 기준으로 추가 주문
-- 지정가(5%+): 1차 진입가 기준으로 추가 주문
-
-### 설정 내보내기/가져오기
-- 📤 설정 내보내기: API 키, 코인 데이터 백업
-- 📥 설정 가져오기: 백업 파일로 복원
-- localhost ↔ GitHub Pages 간 설정 이동 가능
-
----
-
-## 2026-01-28
-
-### 1차 진입 방식 변경
-- 기준가 입력 → % 기반 오프셋으로 변경
-- 0% = 시장가 즉시 진입
-- +5%, +10% 등 = 현재가 대비 % 위에 지정가 진입
-- 5% 단위 조절 (0% ~ 50%)
-
----
-
-## 2026-01-27
-
-### 주문 기능 개선
-- 9% TP(익절) 주문 자동 생성 (1차 진입 후)
-
-### UI 개선
-- 코인 리스트 가격 글씨 크기 확대 (종목명과 동일)
-
----
-
-## 2026-01-26
-
-### 신규상장 자동 감지
-- 10분 주기 자동 스캔
-- 90일 이내 상장 코인 자동 추가
-- 바이낸스 선물 USDT 무기한만 (만기계약/비ASCII 제외)
-
-### 워치리스트 관리
-- MAX 50개 유지
-- 포지션 없는 가장 오래된 코인부터 삭제
-- 포지션 보유 시 삭제 불가 (보호)
-
-### 상태 표시
-- 🔴 ENTERED: 진입 완료
-- ⚫ CLOSED: 청산 완료
-- (없음) WATCHING: 관찰 중
-
-### UI 개선
-- 차트 타이틀 추가 (종목/4시간봉)
-- 가격 간격 조절 가능 (5%~50%)
-- 주문당 금액 $100 단위 조절
-- 중복 코인 추가시 alert 표시
-- 레버리지 설정 검증 추가 (실패시 주문 중단)
-
-### 볼린저밴드 조건
-- 15분봉 + 4시간봉 둘 다 상단(98%)일 때 녹색 배경
 
 ---
 
 ## 사용법
 
-1. API 키 입력 후 연결
-2. 코인 자동 스캔 (3초 후 시작, 10분 주기)
-3. 볼밴 상단 코인 녹색 표시
-4. 코인 클릭 → 차트 확인
-5. 1차 진입 설정 (0%=시장가, +5%~+50%=지정가)
-6. 숏 주문 실행 (1차 진입 + 추가 지정가 N개)
-
-## 접속 주소
-- GitHub Pages: https://magic3899-star.github.io/short-grid/index.html
-- 로컬: http://localhost:8080/index.html
+1. 브라우저에서 http://fundauto.cafe24.com 접속
+2. 코인 추가 (검색창에서 입력)
+3. 코인 선택 → 차트 및 포지션 정보 표시
+4. **그리드 주문**: 주문 설정 후 [숏 주문 실행] 버튼
+5. **물타기**: 포지션 있을 때 [물타기 시작] 버튼
+6. 자동으로 숏/익절 주문 관리됨
+7. [정지] 버튼으로 물타기 비활성화 및 주문 취소

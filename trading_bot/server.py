@@ -1,0 +1,895 @@
+#!/usr/bin/env python3
+"""
+바이낸스 선물 물타기 봇 - Flask 웹서버
+Python으로 완전 구현 (볼린저밴드, 그리드 주문, 차트, 물타기)
+"""
+
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+import threading
+import time
+import hmac
+import hashlib
+import requests
+import json
+import os
+import numpy as np
+from datetime import datetime, timedelta
+
+# ==================== 설정 ====================
+try:
+    from config import (
+        BINANCE_API_KEY, BINANCE_API_SECRET,
+        AVG_INTERVAL, AVG_TP_INTERVAL, AVG_AMOUNT, CHECK_INTERVAL
+    )
+except ImportError:
+    BINANCE_API_KEY = os.environ.get('BINANCE_API_KEY', '')
+    BINANCE_API_SECRET = os.environ.get('BINANCE_API_SECRET', '')
+    AVG_INTERVAL = 2
+    AVG_TP_INTERVAL = 2
+    AVG_AMOUNT = 10
+    CHECK_INTERVAL = 30
+
+API_KEY = BINANCE_API_KEY
+API_SECRET = BINANCE_API_SECRET
+BASE_URL = 'https://fapi.binance.com'
+STATE_FILE = 'averaging_state.json'
+WATCHLIST_FILE = 'watchlist.json'
+
+# Flask 앱
+app = Flask(__name__, static_folder='static')
+CORS(app)
+
+# 전역 상태
+averaging_bots = {}
+server_time_offset = 0
+logs = []
+watchlist = []  # 코인 워치리스트
+coin_data = {}  # 코인별 데이터 (status, bb 등)
+exchange_info = None  # 거래소 정보 캐시
+bb_cache = {}  # 볼린저밴드 캐시
+
+# 그리드 설정
+grid_settings = {
+    'amount': 100,      # 주문당 금액
+    'count': 5,         # 추가 주문 개수
+    'interval': 5,      # 추가 주문 간격 %
+    'entry_offset': 0,  # 1차 진입 오프셋 %
+    'leverage': 10      # 레버리지
+}
+
+# ==================== 유틸리티 ====================
+def log(message, level='info'):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    prefix = {'info': 'ℹ️', 'success': '✅', 'warning': '⚠️', 'error': '❌'}.get(level, 'ℹ️')
+    log_entry = {'time': timestamp, 'level': level, 'message': message}
+    logs.append(log_entry)
+    if len(logs) > 500:
+        logs.pop(0)
+    print(f'[{timestamp}] {prefix} {message}', flush=True)
+
+def get_server_time():
+    global server_time_offset
+    try:
+        res = requests.get(f'{BASE_URL}/fapi/v1/time', timeout=5)
+        server_time = res.json()['serverTime']
+        local_time = int(time.time() * 1000)
+        server_time_offset = server_time - local_time
+        return server_time
+    except:
+        return int(time.time() * 1000) + server_time_offset
+
+def sign_request(params):
+    query = '&'.join([f"{k}={v}" for k, v in params.items()])
+    sig = hmac.new(API_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
+    return query + '&signature=' + sig
+
+def api_request(method, endpoint, params=None, signed=False):
+    headers = {'X-MBX-APIKEY': API_KEY}
+    url = BASE_URL + endpoint
+    if params is None:
+        params = {}
+
+    if signed:
+        params['timestamp'] = get_server_time()
+        params['recvWindow'] = 60000
+        url += '?' + sign_request(params)
+        params = None
+
+    try:
+        if method == 'GET':
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+        elif method == 'POST':
+            res = requests.post(url, headers=headers, params=params, timeout=10)
+        elif method == 'DELETE':
+            res = requests.delete(url, headers=headers, params=params, timeout=10)
+        return res.json()
+    except Exception as e:
+        log(f'API 오류: {e}', 'error')
+        return None
+
+def round_step(value, precision):
+    return round(value, precision)
+
+def round_tick(value, tick_size, precision):
+    return round(round(value / tick_size) * tick_size, precision)
+
+# ==================== 바이낸스 API ====================
+def is_hedge_mode():
+    result = api_request('GET', '/fapi/v1/positionSide/dual', {}, signed=True)
+    return result.get('dualSidePosition', False) if result else False
+
+def get_exchange_info():
+    global exchange_info
+    if exchange_info is None:
+        try:
+            res = requests.get(f'{BASE_URL}/fapi/v1/exchangeInfo', timeout=10)
+            exchange_info = res.json()
+        except:
+            pass
+    return exchange_info
+
+def get_all_symbols():
+    """USDT 무기한 선물 심볼 목록"""
+    info = get_exchange_info()
+    if info:
+        return [s for s in info['symbols']
+                if s['symbol'].endswith('USDT')
+                and s['contractType'] == 'PERPETUAL'
+                and s['status'] == 'TRADING']
+    return []
+
+def get_symbol_info(symbol):
+    info = get_exchange_info()
+    if info:
+        for s in info['symbols']:
+            if s['symbol'] == symbol:
+                return s
+    return None
+
+def get_all_positions():
+    result = api_request('GET', '/fapi/v2/positionRisk', {}, signed=True)
+    if result:
+        return [p for p in result if float(p.get('positionAmt', 0)) != 0]
+    return []
+
+def get_position(symbol):
+    result = api_request('GET', '/fapi/v2/positionRisk', {'symbol': symbol}, signed=True)
+    if result:
+        for p in result:
+            if p['symbol'] == symbol and p.get('positionSide') == 'SHORT':
+                return p
+        for p in result:
+            if p['symbol'] == symbol and float(p.get('positionAmt', 0)) < 0:
+                return p
+    return None
+
+def get_open_orders(symbol=None):
+    params = {'symbol': symbol} if symbol else {}
+    result = api_request('GET', '/fapi/v1/openOrders', params, signed=True)
+    return result if result else []
+
+def get_price(symbol):
+    try:
+        res = requests.get(f'{BASE_URL}/fapi/v1/ticker/price', params={'symbol': symbol}, timeout=5)
+        return float(res.json()['price'])
+    except:
+        return 0
+
+def get_all_prices():
+    try:
+        res = requests.get(f'{BASE_URL}/fapi/v1/ticker/price', timeout=5)
+        return {p['symbol']: float(p['price']) for p in res.json()}
+    except:
+        return {}
+
+def get_klines(symbol, interval='4h', limit=100):
+    """캔들 데이터"""
+    try:
+        res = requests.get(f'{BASE_URL}/fapi/v1/klines',
+                          params={'symbol': symbol, 'interval': interval, 'limit': limit},
+                          timeout=10)
+        return res.json()
+    except:
+        return []
+
+def create_order(symbol, side, order_type, quantity, price=None, reduce_only=False):
+    params = {'symbol': symbol, 'side': side, 'type': order_type, 'quantity': quantity}
+    if is_hedge_mode():
+        params['positionSide'] = 'SHORT'
+    if price:
+        params['price'] = price
+        params['timeInForce'] = 'GTC'
+    if reduce_only:
+        params['reduceOnly'] = 'true'
+
+    result = api_request('POST', '/fapi/v1/order', params, signed=True)
+    if result and 'orderId' in result:
+        log(f'{symbol} 주문: {side} {quantity} @ {price}', 'success')
+        return result
+    log(f'{symbol} 주문 실패: {result}', 'error')
+    return None
+
+def cancel_order(symbol, order_id):
+    result = api_request('DELETE', '/fapi/v1/order', {'symbol': symbol, 'orderId': order_id}, signed=True)
+    if result and 'orderId' in result:
+        log(f'{symbol} 취소: {order_id}', 'info')
+    return result
+
+def cancel_all_orders(symbol):
+    for order in get_open_orders(symbol):
+        cancel_order(symbol, order['orderId'])
+
+def set_leverage(symbol, leverage):
+    result = api_request('POST', '/fapi/v1/leverage', {'symbol': symbol, 'leverage': leverage}, signed=True)
+    return result
+
+# ==================== 볼린저밴드 ====================
+def calculate_bollinger_bands(closes, period=20, multiplier=2):
+    """볼린저밴드 계산"""
+    if len(closes) < period:
+        return None
+
+    closes = np.array(closes, dtype=float)
+    sma = np.mean(closes[-period:])
+    std = np.std(closes[-period:])
+
+    upper = sma + (multiplier * std)
+    lower = sma - (multiplier * std)
+
+    return {
+        'upper': upper,
+        'middle': sma,
+        'lower': lower,
+        'current': closes[-1]
+    }
+
+def check_bb_position(symbol, interval='4h'):
+    """볼린저밴드 위치 체크 (상단 근처면 True)"""
+    cache_key = f'{symbol}_{interval}'
+    now = time.time()
+
+    # 캐시 확인 (5분)
+    if cache_key in bb_cache:
+        cached = bb_cache[cache_key]
+        if now - cached['time'] < 300:
+            return cached['result']
+
+    klines = get_klines(symbol, interval, 50)
+    if not klines:
+        return None
+
+    closes = [float(k[4]) for k in klines]
+    bb = calculate_bollinger_bands(closes)
+
+    if bb is None:
+        return None
+
+    # 상단 98% 이상이면 True
+    range_size = bb['upper'] - bb['lower']
+    position = (bb['current'] - bb['lower']) / range_size if range_size > 0 else 0.5
+
+    result = {
+        'upper': position >= 0.98,
+        'position': position,
+        'bb': bb
+    }
+
+    bb_cache[cache_key] = {'time': now, 'result': result}
+    return result
+
+def scan_bb_upper():
+    """볼린저밴드 상단 코인 스캔"""
+    result = []
+    prices = get_all_prices()
+
+    for symbol in watchlist:
+        if symbol not in prices:
+            continue
+
+        # 15분봉 + 4시간봉 체크
+        bb_15m = check_bb_position(symbol, '15m')
+        bb_4h = check_bb_position(symbol, '4h')
+
+        if bb_15m and bb_4h and bb_15m.get('upper') and bb_4h.get('upper'):
+            result.append({
+                'symbol': symbol,
+                'price': prices[symbol],
+                'bb_15m': bb_15m['position'],
+                'bb_4h': bb_4h['position']
+            })
+
+    return result
+
+# ==================== 상태 저장/로드 ====================
+def save_state():
+    data = {}
+    for symbol, bot in averaging_bots.items():
+        data[symbol] = bot.state
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(data, f, indent=2, default=str)
+    except Exception as e:
+        log(f'상태 저장 실패: {e}', 'error')
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+def save_watchlist():
+    try:
+        with open(WATCHLIST_FILE, 'w') as f:
+            json.dump({'watchlist': watchlist, 'coin_data': coin_data}, f, indent=2)
+    except Exception as e:
+        log(f'워치리스트 저장 실패: {e}', 'error')
+
+def load_watchlist():
+    global watchlist, coin_data
+    if os.path.exists(WATCHLIST_FILE):
+        try:
+            with open(WATCHLIST_FILE, 'r') as f:
+                data = json.load(f)
+                watchlist = data.get('watchlist', [])
+                coin_data = data.get('coin_data', {})
+        except:
+            pass
+
+# ==================== 물타기 봇 ====================
+class AveragingBot:
+    def __init__(self, symbol, avg_interval=AVG_INTERVAL, avg_tp_interval=AVG_TP_INTERVAL, avg_amount=AVG_AMOUNT):
+        self.symbol = symbol
+        self.avg_interval = avg_interval
+        self.avg_tp_interval = avg_tp_interval
+        self.avg_amount = avg_amount
+
+        info = get_symbol_info(symbol)
+        if not info:
+            raise Exception(f'{symbol} 심볼 정보 없음')
+
+        self.price_precision = info['pricePrecision']
+        self.qty_precision = info['quantityPrecision']
+        self.tick_size = float([f for f in info['filters'] if f['filterType'] == 'PRICE_FILTER'][0]['tickSize'])
+        self.min_qty = float([f for f in info['filters'] if f['filterType'] == 'LOT_SIZE'][0]['minQty'])
+
+        self.state = {
+            'is_active': False,
+            'start_qty': 0,
+            'start_entry': 0,
+            'last_qty': 0,
+            'last_entry': 0,
+            'short_order_price': 0,
+            'realized_profit': 0,
+            'tp_count': 0,
+            'entries': [],
+            'avg_interval': avg_interval,
+            'avg_tp_interval': avg_tp_interval,
+            'avg_amount': avg_amount
+        }
+
+    def start(self, start_qty=None, start_entry=None):
+        position = get_position(self.symbol)
+        if not position or float(position['positionAmt']) >= 0:
+            log(f'{self.symbol} 숏 포지션 없음', 'error')
+            return False
+
+        pos_qty = abs(float(position['positionAmt']))
+        entry_price = float(position['entryPrice'])
+
+        self.state.update({
+            'is_active': True,
+            'start_qty': start_qty or pos_qty,
+            'start_entry': start_entry or entry_price,
+            'last_qty': pos_qty,
+            'last_entry': entry_price,
+            'short_order_price': (start_entry or entry_price) * (1 + self.avg_interval / 100),
+            'entries': []
+        })
+
+        log(f'{self.symbol} 물타기 시작 - 기준가: ${self.state["start_entry"]:.4f}', 'success')
+        self.place_short_order()
+        save_state()
+        return True
+
+    def stop(self):
+        cancel_all_orders(self.symbol)
+        self.state['is_active'] = False
+        save_state()
+        log(f'{self.symbol} 물타기 정지', 'info')
+
+    def place_short_order(self):
+        price = round_tick(self.state['start_entry'] * (1 + self.avg_interval / 100), self.tick_size, self.price_precision)
+        qty = max(round_step((self.avg_amount * 2) / price, self.qty_precision), self.min_qty)
+        result = create_order(self.symbol, 'SELL', 'LIMIT', qty, price)
+        if result:
+            self.state['short_order_price'] = price
+            save_state()
+
+    def place_tp_order(self, entry_price):
+        position = get_position(self.symbol)
+        if not position:
+            return
+        pos_qty = abs(float(position['positionAmt']))
+        added_qty = pos_qty - self.state['start_qty']
+        if added_qty <= self.min_qty:
+            return
+        tp_price = round_tick(entry_price * (1 - self.avg_tp_interval / 100), self.tick_size, self.price_precision)
+        tp_qty = round_step(added_qty, self.qty_precision)
+        create_order(self.symbol, 'BUY', 'LIMIT', tp_qty, tp_price)
+        save_state()
+
+    def force_tp_order(self):
+        position = get_position(self.symbol)
+        if not position:
+            return False
+        pos_qty = abs(float(position['positionAmt']))
+        added_qty = pos_qty - self.state.get('start_qty', 0)
+        last_entry = (self.state['entries'][-1]['price'] if self.state.get('entries')
+                     else self.state.get('short_order_price', float(position['entryPrice'])))
+        tp_price = round_tick(last_entry * (1 - self.avg_tp_interval / 100), self.tick_size, self.price_precision)
+        if added_qty > self.min_qty:
+            tp_qty = round_step(added_qty, self.qty_precision)
+        else:
+            tp_qty = max(round_step((self.avg_amount * 2) / tp_price, self.qty_precision), self.min_qty)
+        result = create_order(self.symbol, 'BUY', 'LIMIT', tp_qty, tp_price)
+        return bool(result)
+
+    def fix_tp_order(self):
+        cancel_all_orders(self.symbol)
+        position = get_position(self.symbol)
+        if not position:
+            return
+        pos_qty = abs(float(position['positionAmt']))
+        added_qty = pos_qty - self.state.get('start_qty', 0)
+        if added_qty <= self.min_qty:
+            log(f'{self.symbol} 물타기 수량 없음', 'warning')
+            return
+        last_entry = (self.state['entries'][-1]['price'] if self.state.get('entries')
+                     else self.state.get('short_order_price', float(position['entryPrice'])))
+        self.place_tp_order(last_entry)
+        self.place_short_order()
+        log(f'{self.symbol} 익절 재배치 완료', 'success')
+
+    def check_and_update(self):
+        if not self.state.get('is_active'):
+            return
+        position = get_position(self.symbol)
+        if not position or float(position['positionAmt']) >= 0:
+            log(f'{self.symbol} 포지션 청산됨 - 자동 정지', 'info')
+            self.stop()
+            return
+
+        current_qty = abs(float(position['positionAmt']))
+        current_entry = float(position['entryPrice'])
+        current_price = get_price(self.symbol)
+        last_qty = self.state.get('last_qty', current_qty)
+        last_entry = self.state.get('last_entry', current_entry)
+        qty_changed = abs(current_qty - last_qty) > self.min_qty
+
+        if qty_changed:
+            if current_qty > last_qty:
+                added_qty = current_qty - last_qty
+                added_price = (current_qty * current_entry - last_qty * last_entry) / added_qty
+                self.state['entries'].append({
+                    'price': added_price,
+                    'qty': added_qty,
+                    'time': datetime.now().isoformat()
+                })
+                log(f'{self.symbol} 물타기 진입: ${added_price:.4f} × {added_qty:.0f}', 'success')
+                cancel_all_orders(self.symbol)
+                self.place_tp_order(added_price)
+            elif current_qty < last_qty:
+                filled_qty = last_qty - current_qty
+                tp_profit = filled_qty * last_entry * (self.avg_tp_interval / 100)
+                self.state['realized_profit'] = self.state.get('realized_profit', 0) + tp_profit
+                self.state['tp_count'] = self.state.get('tp_count', 0) + 1
+                self.state['entries'] = []
+                log(f'{self.symbol} 익절: +${tp_profit:.2f} (총 {self.state["tp_count"]}회)', 'success')
+                self.state['start_entry'] = current_price
+                self.state['start_qty'] = current_qty
+                cancel_all_orders(self.symbol)
+                self.place_short_order()
+            self.state['last_qty'] = current_qty
+            self.state['last_entry'] = current_entry
+            save_state()
+        else:
+            short_price = self.state.get('short_order_price', self.state['start_entry'] * (1 + self.avg_interval / 100))
+            threshold = short_price * (1 - self.avg_interval / 100)
+            if current_price < threshold:
+                log(f'{self.symbol} 가격 하락 → 따라가기 (${current_price:.4f})', 'info')
+                cancel_all_orders(self.symbol)
+                self.state['start_entry'] = current_price
+                self.place_short_order()
+                save_state()
+
+# ==================== 백그라운드 스레드 ====================
+def background_checker():
+    while True:
+        try:
+            for symbol, bot in list(averaging_bots.items()):
+                if bot.state.get('is_active'):
+                    bot.check_and_update()
+        except Exception as e:
+            log(f'체크 오류: {e}', 'error')
+        time.sleep(CHECK_INTERVAL)
+
+# ==================== Flask API ====================
+@app.route('/')
+def index():
+    return send_from_directory('static', 'index.html')
+
+@app.route('/<path:path>')
+def static_files(path):
+    return send_from_directory('static', path)
+
+# --- 상태 ---
+@app.route('/api/status')
+def api_status():
+    return jsonify({
+        'status': 'ok',
+        'api_connected': bool(API_KEY and API_SECRET),
+        'averaging_count': len([b for b in averaging_bots.values() if b.state.get('is_active')]),
+        'watchlist_count': len(watchlist),
+        'server_time': datetime.now().isoformat()
+    })
+
+# --- 포지션 ---
+@app.route('/api/positions')
+def api_positions():
+    return jsonify(get_all_positions())
+
+@app.route('/api/position/<symbol>')
+def api_position(symbol):
+    pos = get_position(symbol)
+    return jsonify(pos) if pos else (jsonify({'error': '포지션 없음'}), 404)
+
+# --- 주문 ---
+@app.route('/api/orders')
+def api_orders():
+    symbol = request.args.get('symbol')
+    return jsonify(get_open_orders(symbol))
+
+@app.route('/api/order/create', methods=['POST'])
+def api_order_create():
+    data = request.json or {}
+    result = create_order(data.get('symbol'), data.get('side'), data.get('type', 'LIMIT'),
+                         data.get('quantity'), data.get('price'), data.get('reduceOnly', False))
+    return jsonify(result) if result else (jsonify({'error': '주문 실패'}), 400)
+
+@app.route('/api/order/cancel', methods=['POST'])
+def api_order_cancel():
+    data = request.json or {}
+    result = cancel_order(data.get('symbol'), data.get('orderId'))
+    return jsonify(result) if result else (jsonify({'error': '취소 실패'}), 400)
+
+@app.route('/api/order/cancel_all', methods=['POST'])
+def api_order_cancel_all():
+    data = request.json or {}
+    symbol = data.get('symbol')
+    if symbol:
+        cancel_all_orders(symbol)
+        return jsonify({'success': True})
+    return jsonify({'error': '심볼 필요'}), 400
+
+# --- 가격 ---
+@app.route('/api/prices')
+def api_prices():
+    return jsonify(get_all_prices())
+
+@app.route('/api/price/<symbol>')
+def api_price(symbol):
+    return jsonify({'symbol': symbol, 'price': get_price(symbol)})
+
+# --- 차트 ---
+@app.route('/api/klines/<symbol>')
+def api_klines(symbol):
+    interval = request.args.get('interval', '4h')
+    limit = request.args.get('limit', 100, type=int)
+    klines = get_klines(symbol, interval, limit)
+    # OHLCV 형식으로 변환
+    result = []
+    for k in klines:
+        result.append({
+            'time': k[0] // 1000,
+            'open': float(k[1]),
+            'high': float(k[2]),
+            'low': float(k[3]),
+            'close': float(k[4]),
+            'volume': float(k[5])
+        })
+    return jsonify(result)
+
+# --- 볼린저밴드 ---
+@app.route('/api/bb/<symbol>')
+def api_bb(symbol):
+    interval = request.args.get('interval', '4h')
+    result = check_bb_position(symbol, interval)
+    return jsonify(result) if result else (jsonify({'error': '데이터 없음'}), 404)
+
+@app.route('/api/bb/scan')
+def api_bb_scan():
+    result = scan_bb_upper()
+    return jsonify(result)
+
+# --- 워치리스트 ---
+@app.route('/api/watchlist')
+def api_watchlist():
+    prices = get_all_prices()
+    result = []
+    for symbol in watchlist:
+        data = coin_data.get(symbol, {})
+        result.append({
+            'symbol': symbol,
+            'price': prices.get(symbol, 0),
+            'status': data.get('status', 'watching'),
+            'bb_upper': data.get('bb_upper', False)
+        })
+    return jsonify(result)
+
+@app.route('/api/watchlist/add', methods=['POST'])
+def api_watchlist_add():
+    data = request.json or {}
+    symbol = data.get('symbol', '').upper()
+    if not symbol.endswith('USDT'):
+        symbol += 'USDT'
+
+    if symbol in watchlist:
+        return jsonify({'error': '이미 존재'}), 400
+
+    # 심볼 유효성 검사
+    info = get_symbol_info(symbol)
+    if not info:
+        return jsonify({'error': '유효하지 않은 심볼'}), 400
+
+    watchlist.append(symbol)
+    coin_data[symbol] = {'status': 'watching', 'bb_upper': False}
+    save_watchlist()
+    log(f'{symbol} 워치리스트 추가', 'success')
+    return jsonify({'success': True, 'symbol': symbol})
+
+@app.route('/api/watchlist/remove', methods=['POST'])
+def api_watchlist_remove():
+    data = request.json or {}
+    symbol = data.get('symbol')
+    if symbol in watchlist:
+        watchlist.remove(symbol)
+        if symbol in coin_data:
+            del coin_data[symbol]
+        save_watchlist()
+        log(f'{symbol} 워치리스트 삭제', 'info')
+        return jsonify({'success': True})
+    return jsonify({'error': '없는 심볼'}), 400
+
+@app.route('/api/watchlist/status', methods=['POST'])
+def api_watchlist_status():
+    data = request.json or {}
+    symbol = data.get('symbol')
+    status = data.get('status')
+    if symbol in watchlist:
+        if symbol not in coin_data:
+            coin_data[symbol] = {}
+        coin_data[symbol]['status'] = status
+        save_watchlist()
+        return jsonify({'success': True})
+    return jsonify({'error': '없는 심볼'}), 400
+
+# --- 그리드 주문 ---
+@app.route('/api/grid/settings')
+def api_grid_settings():
+    return jsonify(grid_settings)
+
+@app.route('/api/grid/settings', methods=['POST'])
+def api_grid_settings_update():
+    data = request.json or {}
+    for key in ['amount', 'count', 'interval', 'entry_offset', 'leverage']:
+        if key in data:
+            grid_settings[key] = data[key]
+    return jsonify(grid_settings)
+
+@app.route('/api/grid/place', methods=['POST'])
+def api_grid_place():
+    """그리드 숏 주문 실행"""
+    data = request.json or {}
+    symbol = data.get('symbol')
+    if not symbol:
+        return jsonify({'error': '심볼 필요'}), 400
+
+    info = get_symbol_info(symbol)
+    if not info:
+        return jsonify({'error': '심볼 정보 없음'}), 400
+
+    price_precision = info['pricePrecision']
+    qty_precision = info['quantityPrecision']
+    tick_size = float([f for f in info['filters'] if f['filterType'] == 'PRICE_FILTER'][0]['tickSize'])
+    min_qty = float([f for f in info['filters'] if f['filterType'] == 'LOT_SIZE'][0]['minQty'])
+
+    current_price = get_price(symbol)
+    if current_price <= 0:
+        return jsonify({'error': '가격 조회 실패'}), 400
+
+    amount = data.get('amount', grid_settings['amount'])
+    count = data.get('count', grid_settings['count'])
+    interval = data.get('interval', grid_settings['interval'])
+    entry_offset = data.get('entry_offset', grid_settings['entry_offset'])
+    leverage = data.get('leverage', grid_settings['leverage'])
+
+    # 레버리지 설정
+    set_leverage(symbol, leverage)
+
+    orders = []
+
+    # 1차 진입
+    entry_price = current_price * (1 + entry_offset / 100)
+    entry_price = round_tick(entry_price, tick_size, price_precision)
+    entry_qty = max(round_step(amount / entry_price, qty_precision), min_qty)
+
+    if entry_offset == 0:
+        # 시장가
+        result = create_order(symbol, 'SELL', 'MARKET', entry_qty)
+    else:
+        # 지정가
+        result = create_order(symbol, 'SELL', 'LIMIT', entry_qty, entry_price)
+
+    if result:
+        orders.append(result)
+        # 상태 업데이트
+        if symbol in coin_data:
+            coin_data[symbol]['status'] = 'entered'
+            save_watchlist()
+
+    # 추가 주문 (1차 진입가 기준)
+    for i in range(1, count + 1):
+        add_price = entry_price * (1 + (interval * i) / 100)
+        add_price = round_tick(add_price, tick_size, price_precision)
+        add_qty = max(round_step(amount / add_price, qty_precision), min_qty)
+
+        result = create_order(symbol, 'SELL', 'LIMIT', add_qty, add_price)
+        if result:
+            orders.append(result)
+
+    log(f'{symbol} 그리드 주문 완료: 1차 + {count}개', 'success')
+    return jsonify({'success': True, 'orders': orders})
+
+# --- 물타기 ---
+@app.route('/api/averaging/list')
+def api_averaging_list():
+    result = {}
+    for symbol, bot in averaging_bots.items():
+        result[symbol] = {
+            **bot.state,
+            'current_price': get_price(symbol)
+        }
+    return jsonify(result)
+
+@app.route('/api/averaging/start', methods=['POST'])
+def api_averaging_start():
+    data = request.json or {}
+    symbol = data.get('symbol')
+    if not symbol:
+        return jsonify({'error': '심볼 필요'}), 400
+    try:
+        bot = AveragingBot(
+            symbol,
+            data.get('avg_interval', AVG_INTERVAL),
+            data.get('avg_tp_interval', AVG_TP_INTERVAL),
+            data.get('avg_amount', AVG_AMOUNT)
+        )
+        if bot.start(data.get('start_qty'), data.get('start_entry')):
+            averaging_bots[symbol] = bot
+            return jsonify({'success': True, 'state': bot.state})
+        return jsonify({'error': '시작 실패'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/averaging/stop', methods=['POST'])
+def api_averaging_stop():
+    data = request.json or {}
+    symbol = data.get('symbol')
+    if symbol in averaging_bots:
+        averaging_bots[symbol].stop()
+        del averaging_bots[symbol]
+        return jsonify({'success': True})
+    return jsonify({'error': '물타기 없음'}), 400
+
+@app.route('/api/averaging/force_tp', methods=['POST'])
+def api_averaging_force_tp():
+    data = request.json or {}
+    symbol = data.get('symbol')
+    if symbol in averaging_bots:
+        if averaging_bots[symbol].force_tp_order():
+            return jsonify({'success': True})
+    return jsonify({'error': '강제 익절 실패'}), 400
+
+@app.route('/api/averaging/fix_tp', methods=['POST'])
+def api_averaging_fix_tp():
+    data = request.json or {}
+    symbol = data.get('symbol')
+    if symbol in averaging_bots:
+        averaging_bots[symbol].fix_tp_order()
+        return jsonify({'success': True})
+    return jsonify({'error': '물타기 없음'}), 400
+
+@app.route('/api/averaging/set_base', methods=['POST'])
+def api_averaging_set_base():
+    data = request.json or {}
+    symbol = data.get('symbol')
+    base_entry = data.get('base_entry')
+    if symbol in averaging_bots and base_entry:
+        averaging_bots[symbol].state['start_entry'] = float(base_entry)
+        save_state()
+        log(f'{symbol} 기준가 설정: ${base_entry}', 'success')
+        return jsonify({'success': True})
+    return jsonify({'error': '설정 실패'}), 400
+
+@app.route('/api/averaging/state/<symbol>')
+def api_averaging_state(symbol):
+    if symbol in averaging_bots:
+        return jsonify(averaging_bots[symbol].state)
+    return jsonify({'error': '물타기 없음'}), 404
+
+# --- 심볼 정보 ---
+@app.route('/api/symbol/<symbol>')
+def api_symbol_info(symbol):
+    info = get_symbol_info(symbol)
+    if info:
+        return jsonify(info)
+    return jsonify({'error': '심볼 없음'}), 404
+
+# --- 로그 ---
+@app.route('/api/logs')
+def api_logs():
+    limit = request.args.get('limit', 100, type=int)
+    return jsonify(logs[-limit:])
+
+# --- 설정 ---
+@app.route('/api/config')
+def api_config():
+    return jsonify({
+        'avg_interval': AVG_INTERVAL,
+        'avg_tp_interval': AVG_TP_INTERVAL,
+        'avg_amount': AVG_AMOUNT,
+        'check_interval': CHECK_INTERVAL,
+        'grid': grid_settings
+    })
+
+# ==================== 메인 ====================
+if __name__ == '__main__':
+    log('서버 시작 중...', 'info')
+
+    # 서버 시간 동기화
+    get_server_time()
+
+    # 거래소 정보 로드
+    get_exchange_info()
+
+    # 워치리스트 로드
+    load_watchlist()
+    log(f'워치리스트 로드: {len(watchlist)}개', 'info')
+
+    # 물타기 상태 복원
+    saved = load_state()
+    for symbol, state in saved.items():
+        if state.get('is_active'):
+            try:
+                bot = AveragingBot(symbol,
+                    state.get('avg_interval', AVG_INTERVAL),
+                    state.get('avg_tp_interval', AVG_TP_INTERVAL),
+                    state.get('avg_amount', AVG_AMOUNT))
+                bot.state = state
+                averaging_bots[symbol] = bot
+                log(f'{symbol} 물타기 복원됨', 'success')
+            except Exception as e:
+                log(f'{symbol} 복원 실패: {e}', 'error')
+
+    # 백그라운드 체커
+    checker = threading.Thread(target=background_checker, daemon=True)
+    checker.start()
+    log(f'백그라운드 체커 시작 ({CHECK_INTERVAL}초 간격)', 'info')
+
+    # Flask 서버
+    log('웹서버: http://0.0.0.0:80', 'success')
+    app.run(host='0.0.0.0', port=80, debug=False, threaded=True)

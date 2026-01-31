@@ -790,11 +790,20 @@
             // UI 업데이트
             renderActiveAveragingList();
 
-            // 첫 번째 물타기 종목 자동 선택
+            // 첫 번째 물타기 종목 자동 선택 및 상태창 표시
             const activeSymbols = Object.keys(averagingStates).filter(s => averagingStates[s].isActive);
             if (activeSymbols.length > 0) {
                 const firstSymbol = activeSymbols[0];
                 await selectCoin(firstSymbol);
+
+                // 물타기 상태창 강제 표시
+                const state = averagingStates[firstSymbol];
+                if (state && state.position) {
+                    currentPosition = state.position;
+                    updateAveragingCardUI(firstSymbol);
+                    updateAvgProgress(firstSymbol);
+                }
+
                 log(`${firstSymbol} 자동 선택 (물타기 진행 중)`, 'info');
             }
 

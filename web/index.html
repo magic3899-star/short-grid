@@ -1957,7 +1957,7 @@
                 qty: positionQty, entry: currentPrice, pnl: pnl
             }));
 
-            log(`${symbol} 물타기 시작 - 추가숏 +${avgInterval}%, 익절(체결가 -${avgInterval + avgTpInterval}%), $${avgAmount}`, 'info');
+            log(`${symbol} 물타기 시작 - 추가숏 +${avgInterval}%, 익절(체결가 -${avgTpInterval}%), $${avgAmount}`, 'info');
             log(`기준가: $${currentPrice.toFixed(4)} | 숏: $${(currentPrice * (1 + avgInterval/100)).toFixed(4)} | 가격 하락 시 숏 따라감`, 'info');
 
             // 기존 주문 취소 후 초기 주문 배치
@@ -2188,14 +2188,14 @@
                 const positionQty = Math.abs(parseFloat(state.position.positionAmt));
                 const addedQty = positionQty - state.startQty;
 
-                // 체결가(평단)에서 -4% 지점 (숏 +2%에서 체결됐으면, 그 아래 -4% = 원래 기준가 -2%)
-                const tpPrice = roundToTick(fillPrice * (1 - (avgInterval + avgTpInterval) / 100), tickSize, pricePrecision);
+                // 체결가(평단)에서 -2% 지점 = 2% 수익
+                const tpPrice = roundToTick(fillPrice * (1 - avgTpInterval / 100), tickSize, pricePrecision);
                 const avgQty = Math.max(roundStep((avgAmount * 2) / tpPrice, quantityPrecision), minQty);
 
                 if (addedQty > minQty) {
                     const tpQty = Math.min(avgQty, addedQty);
                     await createOrder(symbol, 'BUY', 'LIMIT', tpQty, tpPrice);
-                    log(`${symbol} 익절 배치: $${tpPrice.toFixed(4)} × ${tpQty} (체결가 -${avgInterval + avgTpInterval}%)`, 'success');
+                    log(`${symbol} 익절 배치: $${tpPrice.toFixed(4)} × ${tpQty} (체결가 -${avgTpInterval}%)`, 'success');
                 }
             } catch (e) {
                 log(`${symbol} 익절 실패: ${e.message}`, 'error');

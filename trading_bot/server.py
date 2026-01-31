@@ -35,6 +35,7 @@ API_SECRET = BINANCE_API_SECRET
 BASE_URL = 'https://fapi.binance.com'
 STATE_FILE = 'averaging_state.json'
 WATCHLIST_FILE = 'watchlist.json'
+TRADES_FILE = 'trades.json'  # 매매 기록 파일
 
 # Flask 앱
 app = Flask(__name__, static_folder='static')
@@ -48,6 +49,7 @@ watchlist = []  # 코인 워치리스트
 coin_data = {}  # 코인별 데이터 (status, bb 등)
 exchange_info = None  # 거래소 정보 캐시
 bb_cache = {}  # 볼린저밴드 캐시
+trades = []  # 매매 기록
 
 # 그리드 설정
 grid_settings = {
@@ -193,7 +195,7 @@ def get_klines(symbol, interval='4h', limit=100):
     except:
         return []
 
-def create_order(symbol, side, order_type, quantity, price=None, reduce_only=False):
+def create_order(symbol, side, order_type, quantity, price=None, reduce_only=False, trade_type='manual', note=None):
     params = {'symbol': symbol, 'side': side, 'type': order_type, 'quantity': quantity}
     if is_hedge_mode():
         params['positionSide'] = 'SHORT'
@@ -206,6 +208,16 @@ def create_order(symbol, side, order_type, quantity, price=None, reduce_only=Fal
     result = api_request('POST', '/fapi/v1/order', params, signed=True)
     if result and 'orderId' in result:
         log(f'{symbol} 주문: {side} {quantity} @ {price}', 'success')
+        # 매매 기록 저장
+        record_trade(
+            trade_type=trade_type,
+            symbol=symbol,
+            side=side,
+            quantity=float(quantity),
+            price=float(price) if price else float(result.get('avgPrice', 0)),
+            order_id=result.get('orderId'),
+            note=note
+        )
         return result
     log(f'{symbol} 주문 실패: {result}', 'error')
     return None
@@ -321,6 +333,49 @@ def load_state():
             pass
     return {}
 
+# ==================== 매매 기록 저장/로드 ====================
+def save_trades():
+    """매매 기록 파일에 저장"""
+    try:
+        with open(TRADES_FILE, 'w') as f:
+            json.dump(trades, f, indent=2, ensure_ascii=False, default=str)
+    except Exception as e:
+        log(f'매매 기록 저장 실패: {e}', 'error')
+
+def load_trades():
+    """매매 기록 파일에서 로드"""
+    global trades
+    if os.path.exists(TRADES_FILE):
+        try:
+            with open(TRADES_FILE, 'r') as f:
+                trades = json.load(f)
+                log(f'매매 기록 로드: {len(trades)}건', 'info')
+        except:
+            trades = []
+    return trades
+
+def record_trade(trade_type, symbol, side, quantity, price, order_id=None, pnl=None, note=None):
+    """매매 기록 추가
+    trade_type: 'grid_entry', 'grid_add', 'averaging_short', 'averaging_tp', 'manual', 'cancel'
+    """
+    trade = {
+        'id': len(trades) + 1,
+        'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'type': trade_type,
+        'symbol': symbol,
+        'side': side,
+        'quantity': quantity,
+        'price': price,
+        'value': quantity * price if quantity and price else 0,
+        'order_id': order_id,
+        'pnl': pnl,
+        'note': note
+    }
+    trades.append(trade)
+    save_trades()
+    log(f'매매 기록: {trade_type} {symbol} {side} {quantity}@{price}', 'info')
+    return trade
+
 def save_watchlist():
     try:
         with open(WATCHLIST_FILE, 'w') as f:
@@ -404,7 +459,8 @@ class AveragingBot:
     def place_short_order(self):
         price = round_tick(self.state['start_entry'] * (1 + self.avg_interval / 100), self.tick_size, self.price_precision)
         qty = max(round_step((self.avg_amount * 2) / price, self.qty_precision), self.min_qty)
-        result = create_order(self.symbol, 'SELL', 'LIMIT', qty, price)
+        result = create_order(self.symbol, 'SELL', 'LIMIT', qty, price,
+                             trade_type='averaging_short', note=f'물타기 숏 (+{self.avg_interval}%)')
         if result:
             self.state['short_order_price'] = price
             save_state()
@@ -419,7 +475,8 @@ class AveragingBot:
             return
         tp_price = round_tick(entry_price * (1 - self.avg_tp_interval / 100), self.tick_size, self.price_precision)
         tp_qty = round_step(added_qty, self.qty_precision)
-        create_order(self.symbol, 'BUY', 'LIMIT', tp_qty, tp_price)
+        create_order(self.symbol, 'BUY', 'LIMIT', tp_qty, tp_price,
+                    trade_type='averaging_tp', note=f'물타기 익절 (-{self.avg_tp_interval}%)')
         save_state()
 
     def force_tp_order(self):
@@ -435,7 +492,8 @@ class AveragingBot:
             tp_qty = round_step(added_qty, self.qty_precision)
         else:
             tp_qty = max(round_step((self.avg_amount * 2) / tp_price, self.qty_precision), self.min_qty)
-        result = create_order(self.symbol, 'BUY', 'LIMIT', tp_qty, tp_price)
+        result = create_order(self.symbol, 'BUY', 'LIMIT', tp_qty, tp_price,
+                             trade_type='averaging_tp', note='강제 익절')
         return bool(result)
 
     def fix_tp_order(self):
@@ -480,6 +538,15 @@ class AveragingBot:
                     'time': datetime.now().isoformat()
                 })
                 log(f'{self.symbol} 물타기 진입: ${added_price:.4f} × {added_qty:.0f}', 'success')
+                # 물타기 진입 체결 기록
+                record_trade(
+                    trade_type='averaging_short_filled',
+                    symbol=self.symbol,
+                    side='SELL',
+                    quantity=added_qty,
+                    price=added_price,
+                    note=f'물타기 {len(self.state["entries"])}차 체결'
+                )
                 cancel_all_orders(self.symbol)
                 self.place_tp_order(added_price)
             elif current_qty < last_qty:
@@ -489,6 +556,16 @@ class AveragingBot:
                 self.state['tp_count'] = self.state.get('tp_count', 0) + 1
                 self.state['entries'] = []
                 log(f'{self.symbol} 익절: +${tp_profit:.2f} (총 {self.state["tp_count"]}회)', 'success')
+                # 익절 체결 기록
+                record_trade(
+                    trade_type='averaging_tp_filled',
+                    symbol=self.symbol,
+                    side='BUY',
+                    quantity=filled_qty,
+                    price=last_entry * (1 - self.avg_tp_interval / 100),
+                    pnl=tp_profit,
+                    note=f'익절 체결 ({self.state["tp_count"]}회차)'
+                )
                 self.state['start_entry'] = current_price
                 self.state['start_qty'] = current_qty
                 cancel_all_orders(self.symbol)
@@ -729,10 +806,10 @@ def api_grid_place():
 
     if entry_offset == 0:
         # 시장가
-        result = create_order(symbol, 'SELL', 'MARKET', entry_qty)
+        result = create_order(symbol, 'SELL', 'MARKET', entry_qty, trade_type='grid_entry', note='1차 진입 (시장가)')
     else:
         # 지정가
-        result = create_order(symbol, 'SELL', 'LIMIT', entry_qty, entry_price)
+        result = create_order(symbol, 'SELL', 'LIMIT', entry_qty, entry_price, trade_type='grid_entry', note=f'1차 진입 (+{entry_offset}%)')
 
     if result:
         orders.append(result)
@@ -747,7 +824,7 @@ def api_grid_place():
         add_price = round_tick(add_price, tick_size, price_precision)
         add_qty = max(round_step(amount / add_price, qty_precision), min_qty)
 
-        result = create_order(symbol, 'SELL', 'LIMIT', add_qty, add_price)
+        result = create_order(symbol, 'SELL', 'LIMIT', add_qty, add_price, trade_type='grid_add', note=f'추가 {i}차 (+{interval*i}%)')
         if result:
             orders.append(result)
 
@@ -845,6 +922,55 @@ def api_logs():
     limit = request.args.get('limit', 100, type=int)
     return jsonify(logs[-limit:])
 
+# --- 매매 기록 ---
+@app.route('/api/trades')
+def api_trades():
+    """매매 기록 조회"""
+    symbol = request.args.get('symbol')
+    trade_type = request.args.get('type')
+    limit = request.args.get('limit', 100, type=int)
+
+    result = trades
+    if symbol:
+        result = [t for t in result if t.get('symbol') == symbol]
+    if trade_type:
+        result = [t for t in result if t.get('type') == trade_type]
+
+    return jsonify(result[-limit:])
+
+@app.route('/api/trades/summary')
+def api_trades_summary():
+    """매매 기록 요약"""
+    symbol = request.args.get('symbol')
+
+    result = trades
+    if symbol:
+        result = [t for t in result if t.get('symbol') == symbol]
+
+    total_pnl = sum(t.get('pnl', 0) or 0 for t in result)
+    total_trades = len(result)
+    grid_entries = len([t for t in result if t.get('type') == 'grid_entry'])
+    avg_shorts = len([t for t in result if 'averaging_short' in t.get('type', '')])
+    avg_tps = len([t for t in result if 'averaging_tp' in t.get('type', '')])
+
+    return jsonify({
+        'total_trades': total_trades,
+        'total_pnl': total_pnl,
+        'grid_entries': grid_entries,
+        'averaging_shorts': avg_shorts,
+        'averaging_tps': avg_tps,
+        'symbols': list(set(t.get('symbol') for t in result if t.get('symbol')))
+    })
+
+@app.route('/api/trades/clear', methods=['POST'])
+def api_trades_clear():
+    """매매 기록 초기화"""
+    global trades
+    trades = []
+    save_trades()
+    log('매매 기록 초기화', 'info')
+    return jsonify({'success': True})
+
 # --- 설정 ---
 @app.route('/api/config')
 def api_config():
@@ -869,6 +995,9 @@ if __name__ == '__main__':
     # 워치리스트 로드
     load_watchlist()
     log(f'워치리스트 로드: {len(watchlist)}개', 'info')
+
+    # 매매 기록 로드
+    load_trades()
 
     # 물타기 상태 복원
     saved = load_state()

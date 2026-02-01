@@ -63,7 +63,7 @@ ws_connected = False  # 웹소켓 연결 상태
 # 그리드 설정
 grid_settings = {
     'amount': 100,      # 주문당 금액
-    'count': 5,         # 추가 주문 개수
+    'count': 3,         # 추가 주문 개수
     'interval': 5,      # 추가 주문 간격 %
     'entry_offset': 0,  # 1차 진입 오프셋 %
     'leverage': 10      # 레버리지

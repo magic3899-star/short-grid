@@ -1,0 +1,1766 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#0d1117">
+    <meta name="description" content="바이낸스 선물 숏 그리드 자동매매">
+    <title>SHORT GRID ORDER</title>
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            min-height: 100vh;
+        }
+
+        /* 헤더 */
+        .header {
+            background: #161b22;
+            padding: 15px 20px;
+            border-bottom: 1px solid #30363d;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header h1 {
+            color: #f85149;
+            font-size: 1.3em;
+            margin-bottom: 5px;
+        }
+
+        .header-info {
+            color: #8b949e;
+            font-size: 0.85em;
+        }
+
+        /* 메인 컨테이너 */
+        .container {
+            padding: 15px;
+            width: 80%;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* 카드 */
+        .card {
+            background: #161b22;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .card-title {
+            color: #8b949e;
+            font-size: 0.85em;
+            font-weight: bold;
+            margin-bottom: 12px;
+        }
+
+        /* API 설정 */
+        .api-input {
+            width: 100%;
+            padding: 12px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #c9d1d9;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .api-input:focus {
+            outline: none;
+            border-color: #58a6ff;
+        }
+
+        .btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .btn-primary {
+            background: #238636;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2ea043;
+        }
+
+        .btn-danger {
+            background: #f85149;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #da3633;
+        }
+
+        .btn-secondary {
+            background: #21262d;
+            color: #c9d1d9;
+        }
+
+        .btn-secondary:hover {
+            background: #30363d;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* 코인 선택 */
+        .coin-search {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .coin-search input {
+            flex: 1;
+        }
+
+        .coin-search .btn {
+            width: auto;
+            padding: 12px 15px;
+        }
+
+        .coin-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .coin-item {
+            padding: 8px 12px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #21262d;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 13px;
+        }
+
+        .coin-item:hover {
+            background: #30363d;
+        }
+
+        .coin-item.selected {
+            background: #238636;
+        }
+
+        .coin-item.bb-upper {
+            background: rgba(63, 185, 80, 0.3);
+        }
+
+        .coin-item.status-entered {
+            border-left: 3px solid #f85149;
+        }
+
+        .coin-item.status-closed {
+            opacity: 0.5;
+        }
+
+        .price-input {
+            width: 120px;
+            padding: 8px 10px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #58a6ff;
+            font-family: 'Consolas', monospace;
+            font-size: 14px;
+            text-align: right;
+        }
+
+        .price-input:focus {
+            outline: none;
+            border-color: #58a6ff;
+        }
+
+        .coin-item .name {
+            font-weight: bold;
+        }
+
+        .coin-item .price {
+            color: #58a6ff;
+            font-family: 'Consolas', monospace;
+        }
+
+        .coin-item .delete-btn {
+            color: #f85149;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 18px;
+            padding: 0 5px;
+        }
+
+        /* 선택된 코인 정보 */
+        .selected-coin {
+            text-align: center;
+            padding: 20px;
+        }
+
+        .selected-coin .symbol {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #c9d1d9;
+        }
+
+        .selected-coin .price {
+            font-size: 2.2em;
+            font-weight: bold;
+            color: #58a6ff;
+            font-family: 'Consolas', monospace;
+            margin-top: 5px;
+        }
+
+        /* 설정 조정 */
+        .setting-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #21262d;
+        }
+
+        .setting-row:last-child {
+            border-bottom: none;
+        }
+
+        .setting-label {
+            color: #8b949e;
+        }
+
+        .setting-value {
+            color: #c9d1d9;
+            font-weight: bold;
+        }
+
+        .setting-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .setting-control .btn-adj {
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            font-size: 20px;
+            border-radius: 50%;
+        }
+
+        .setting-control .value {
+            min-width: 80px;
+            text-align: center;
+            font-size: 1.1em;
+            font-weight: bold;
+            color: #58a6ff;
+        }
+
+        .total-amount {
+            color: #f0883e !important;
+            font-size: 1.2em !important;
+        }
+
+        /* 주문 버튼 */
+        .order-btn {
+            padding: 18px;
+            font-size: 1.1em;
+        }
+
+        /* 로그 */
+        .log-area {
+            background: #0d1117;
+            border-radius: 6px;
+            padding: 15px;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            max-height: 250px;
+            overflow-y: auto;
+            color: #7ee787;
+        }
+
+        .log-area .error {
+            color: #f85149;
+        }
+
+        .log-area .info {
+            color: #58a6ff;
+        }
+
+        .log-area .success {
+            color: #7ee787;
+        }
+
+        /* 상태 표시 */
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+
+        .status.connected {
+            background: rgba(35, 134, 54, 0.2);
+            color: #7ee787;
+        }
+
+        .status.disconnected {
+            background: rgba(248, 81, 73, 0.2);
+            color: #f85149;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        /* 모달 */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: #161b22;
+            padding: 25px;
+            border-radius: 12px;
+            max-width: 400px;
+            width: 90%;
+            text-align: center;
+        }
+
+        .modal-content h3 {
+            margin-bottom: 15px;
+        }
+
+        .modal-content p {
+            color: #8b949e;
+            margin-bottom: 20px;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .modal-buttons .btn {
+            flex: 1;
+        }
+
+        /* ==================== 모바일 최적화 ==================== */
+
+        /* 터치 최적화 */
+        @media (pointer: coarse) {
+            .btn, .coin-item, .api-input, .price-input {
+                min-height: 48px;
+            }
+
+            .coin-item {
+                padding: 12px 16px;
+            }
+        }
+
+        /* 반응형 - 태블릿 */
+        @media (max-width: 768px) {
+            .container {
+                width: 95%;
+                padding: 10px;
+            }
+
+            #chartContainer {
+                height: 350px !important;
+            }
+
+            .coin-list {
+                max-height: 250px;
+            }
+        }
+
+        /* 반응형 - 모바일 */
+        @media (max-width: 480px) {
+            .container {
+                width: 100%;
+                padding: 8px;
+            }
+
+            .header {
+                padding: 12px 15px;
+            }
+
+            .header h1 {
+                font-size: 1.1em;
+            }
+
+            .header-info {
+                font-size: 0.75em;
+            }
+
+            .card {
+                padding: 12px;
+                margin-bottom: 10px;
+                border-radius: 8px;
+            }
+
+            .card-title {
+                font-size: 0.8em;
+            }
+
+            .api-input {
+                padding: 14px 12px;
+                font-size: 16px;
+            }
+
+            .btn {
+                padding: 14px 16px;
+                font-size: 15px;
+            }
+
+            .coin-item {
+                padding: 10px 12px;
+                font-size: 14px;
+            }
+
+            .coin-list {
+                max-height: 200px;
+                padding: 8px;
+                gap: 6px;
+            }
+
+            #chartContainer {
+                height: 280px !important;
+            }
+
+            #chartTitle {
+                padding: 8px 12px;
+                font-size: 0.9em;
+            }
+
+            .setting-row {
+                flex-direction: column;
+                align-items: stretch !important;
+                gap: 8px;
+            }
+
+            .setting-row label {
+                min-width: auto;
+            }
+
+            .setting-row .btn {
+                width: auto;
+                min-width: 36px;
+            }
+
+            .avg-status {
+                font-size: 0.85em;
+            }
+
+            .avg-info-row {
+                flex-direction: column;
+                gap: 4px;
+            }
+
+            .log-list {
+                max-height: 150px;
+                font-size: 0.8em;
+            }
+
+            .modal-content {
+                width: 95%;
+                margin: 10% auto;
+                padding: 15px;
+            }
+
+            .modal-content h3 {
+                font-size: 1.1em;
+            }
+
+            .selected-coin .symbol {
+                font-size: 1.5em;
+            }
+
+            .selected-coin .price {
+                font-size: 1.8em;
+            }
+        }
+
+        /* 반응형 - 초소형 모바일 */
+        @media (max-width: 360px) {
+            .header h1 {
+                font-size: 1em;
+            }
+
+            .coin-item {
+                padding: 8px 10px;
+                font-size: 13px;
+            }
+
+            #chartContainer {
+                height: 240px !important;
+            }
+
+            .btn {
+                padding: 12px 14px;
+                font-size: 14px;
+            }
+        }
+
+        /* 가로 모드 모바일 */
+        @media (max-height: 500px) and (orientation: landscape) {
+            .header {
+                padding: 8px 15px;
+            }
+
+            .header h1 {
+                font-size: 1em;
+                margin-bottom: 2px;
+            }
+
+            #chartContainer {
+                height: 200px !important;
+            }
+
+            .coin-list {
+                max-height: 120px;
+            }
+        }
+
+        /* PWA 홈 화면 추가 시 safe area 처리 */
+        @supports (padding: max(0px)) {
+            .header {
+                padding-top: max(15px, env(safe-area-inset-top));
+            }
+
+            .container {
+                padding-bottom: max(15px, env(safe-area-inset-bottom));
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 헤더 -->
+    <div class="header">
+        <h1>SHORT GRID ORDER (Python Server)</h1>
+        <div class="header-info" id="headerInfo">5% 간격 | 3개 주문 | $100/주문 | 총 $300</div>
+    </div>
+
+    <div class="container">
+        <!-- 연결 상태 -->
+        <div class="status disconnected" id="statusBar">
+            <span class="status-dot"></span>
+            <span id="statusText">서버 연결 중...</span>
+        </div>
+
+        <!-- 코인 선택 -->
+        <div class="card">
+            <div class="card-title">코인 선택</div>
+            <div class="coin-search">
+                <input type="text" class="api-input" id="coinSearch" placeholder="코인 검색 (예: BTC)" style="margin-bottom:0">
+                <button class="btn btn-primary" onclick="addCoin()">+ 추가</button>
+            </div>
+            <div class="coin-list" id="coinList">
+                <div style="padding:20px; text-align:center; color:#8b949e;">코인을 추가하세요</div>
+            </div>
+
+            <!-- 차트 (리스트 바로 아래) -->
+            <div id="selectedCoinCard" style="display:none; margin-top:15px;">
+                <div id="chartTitle" style="padding:10px 15px; background:#161b22; border-radius:8px 8px 0 0; border-bottom:1px solid #30363d; font-weight:bold; color:#58a6ff;"></div>
+                <div id="chartContainer" style="border-radius:0 0 8px 8px; overflow:hidden; height:450px; background:#161b22;"></div>
+            </div>
+            <!-- 숨겨진 요소 (JS 호환용) -->
+            <div id="selectedSymbol" style="display:none;"></div>
+            <div id="selectedPrice" style="display:none;"></div>
+        </div>
+
+        <!-- 주문 설정 -->
+        <div class="card">
+            <div class="card-title">주문 설정</div>
+
+            <div class="setting-row">
+                <span class="setting-label">레버리지</span>
+                <span class="setting-value">2배 격리</span>
+            </div>
+
+            <div class="setting-row">
+                <span class="setting-label">포지션</span>
+                <span class="setting-value">SHORT</span>
+            </div>
+
+            <div class="setting-row">
+                <span class="setting-label">1차 진입</span>
+                <div class="setting-control">
+                    <button class="btn btn-secondary btn-adj" onclick="adjustEntryOffset(-5)">-</button>
+                    <span class="value" id="entryOffsetValue">0% (시장가)</span>
+                    <button class="btn btn-secondary btn-adj" onclick="adjustEntryOffset(5)">+</button>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <span class="setting-label">가격 간격</span>
+                <div class="setting-control">
+                    <button class="btn btn-secondary btn-adj" onclick="adjustInterval(-5)">-</button>
+                    <span class="value" id="intervalValue">+5%</span>
+                    <button class="btn btn-secondary btn-adj" onclick="adjustInterval(5)">+</button>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <span class="setting-label">주문당 금액</span>
+                <div class="setting-control">
+                    <button class="btn btn-secondary btn-adj" onclick="adjustAmount(-100)">-</button>
+                    <span class="value" id="amountValue">$100</span>
+                    <button class="btn btn-secondary btn-adj" onclick="adjustAmount(100)">+</button>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <span class="setting-label">주문 횟수</span>
+                <div class="setting-control">
+                    <button class="btn btn-secondary btn-adj" onclick="adjustCount(-1)">-</button>
+                    <span class="value" id="countValue">3회</span>
+                    <button class="btn btn-secondary btn-adj" onclick="adjustCount(1)">+</button>
+                </div>
+            </div>
+
+            <div class="setting-row">
+                <span class="setting-label">총 투입금액</span>
+                <span class="setting-value total-amount" id="totalAmount">$300</span>
+            </div>
+        </div>
+
+        <!-- 주문 버튼 -->
+        <button class="btn btn-danger order-btn" id="orderBtn" onclick="placeOrders()" disabled>
+            숏 주문 실행 (3개)
+        </button>
+
+        <button class="btn btn-secondary" id="cancelBtn" onclick="confirmCancel()" disabled style="margin-top:10px">
+            선택 코인 오픈오더 전체 취소
+        </button>
+
+        <!-- 활성 물타기 종목 요약 (여러 종목 한눈에) -->
+        <div class="card" id="activeAvgSummaryCard" style="margin-top:15px; border: 1px solid #238636; display:none;">
+            <div class="card-title" style="color:#238636;">물타기 진행 현황</div>
+            <div id="activeAvgSummary" style="font-size:12px;">
+                <!-- 동적으로 채워짐 -->
+            </div>
+        </div>
+
+        <!-- 물타기 설정 (포지션 있을 때만 표시) -->
+        <div class="card" id="averagingCard" style="margin-top:15px; border: 1px solid #f0883e;">
+            <div class="card-title" style="color:#f0883e;">물타기 모드 <span id="avgCoinName" style="color:#58a6ff;"></span>
+                <span style="float:right; font-size:11px;">활성: <span id="activeAvgList"><span style="color:#8b949e;">없음</span></span></span>
+            </div>
+
+            <div id="noPositionMsg" style="padding:20px; text-align:center; color:#8b949e;">
+                종목을 선택하세요
+            </div>
+
+            <div id="positionInfo" style="display:none; background:#21262d; padding:10px; border-radius:6px; margin-bottom:10px; font-family:Consolas,monospace; font-size:13px;">
+                <div>현재 평단: <span id="avgEntryPrice">-</span> | 수량: <span id="avgPositionQty">-</span></div>
+                <div>손익: <span id="avgPnL">-</span></div>
+                <div style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+                    <span style="color:#f0883e;">기준 평단:</span>
+                    <input type="text" id="baseEntryInput" class="price-input" style="width:100px; font-size:12px;" placeholder="원래 진입가">
+                    <button class="btn btn-secondary" onclick="setBaseEntry()" style="padding:4px 8px; font-size:11px;">설정</button>
+                    <span id="tpPreview" style="color:#7ee787; font-size:11px;">익절가: -</span>
+                </div>
+            </div>
+
+            <div id="avgSettings" style="display:none;">
+                <div class="setting-row">
+                    <span class="setting-label">추가 숏 간격</span>
+                    <div class="setting-control">
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(-1)">-</button>
+                        <span class="value" id="avgIntervalValue">+2%</span>
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgInterval(1)">+</button>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <span class="setting-label">추가 금액</span>
+                    <div class="setting-control">
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgAmount(-100)">-</button>
+                        <span class="value" id="avgAmountValue">$500</span>
+                        <button class="btn btn-secondary btn-adj" onclick="adjustAvgAmount(100)">+</button>
+                    </div>
+                </div>
+
+                <div class="setting-row">
+                    <span class="setting-label">익절 간격</span>
+                    <div class="setting-control">
+                        <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(-1)">-</button>
+                        <span class="value" id="avgTpIntervalValue">-2%</span>
+                        <button class="btn btn-secondary btn-adj" onclick="adjustTpInterval(1)">+</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="avgButtons" style="display:none; gap:10px; margin-top:15px;">
+                <button class="btn btn-primary" id="startAvgBtn" onclick="startAveraging()" style="flex:1;">물타기 시작</button>
+                <button class="btn btn-danger" id="stopAvgBtn" onclick="stopAveraging()" style="flex:1; display:none;">정지</button>
+                <button class="btn btn-secondary" id="refreshAvgBtn" onclick="refreshAveragingOrders()" style="flex:1; display:none;">주문갱신</button>
+                <button class="btn btn-secondary" id="forceTpBtn" onclick="forcePlaceTpOrder()" style="flex:1; display:none; background:#238636;">강제익절</button>
+            </div>
+
+            <div id="avgStatus" style="margin-top:10px; padding:10px; background:#21262d; border-radius:6px; font-size:12px; display:none;">
+                <div style="color:#7ee787;">● 물타기 활성화</div>
+                <div id="avgOrderInfo" style="margin-top:5px; color:#8b949e;"></div>
+            </div>
+
+            <!-- 물타기 효과 표시 (활성화 시에만) -->
+            <div id="avgProgressCard" style="margin-top:10px; padding:10px; background:#0d1117; border:1px solid #30363d; border-radius:6px; font-size:12px; display:none;">
+                <div style="color:#8b949e; margin-bottom:8px;">물타기 효과</div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <span style="color:#8b949e;">시작</span>
+                    <span id="avgStartInfo" style="color:#c9d1d9;">-</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                    <span style="color:#8b949e;">현재</span>
+                    <span id="avgCurrentInfo" style="color:#c9d1d9;">-</span>
+                </div>
+                <div style="border-top:1px solid #30363d; margin:8px 0; padding-top:8px;">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                        <span style="color:#8b949e;">평단 변화</span>
+                        <span id="avgEntryChange" style="font-weight:bold;">-</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                        <span style="color:#8b949e;">수량 변화</span>
+                        <span id="avgQtyChange" style="font-weight:bold;">-</span>
+                    </div>
+                    <div style="display:flex; justify-content:space-between;">
+                        <span style="color:#8b949e;">손익 변화</span>
+                        <span id="avgPnLChange" style="font-weight:bold;">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 물타기 상세 정보 -->
+            <div id="avgDetailCard" style="margin-top:10px; padding:12px; background:#0d1117; border:1px solid #30363d; border-radius:6px; font-size:12px; display:none;">
+                <div style="color:#58a6ff; margin-bottom:10px; font-weight:bold;">물타기 상세</div>
+                <div id="avgDetailInfo" style="color:#c9d1d9; line-height:1.8;">
+                    <!-- 동적으로 채워짐 -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 로그 -->
+        <div class="card" style="margin-top:15px">
+            <div class="card-title">실행 로그</div>
+            <div class="log-area" id="logArea">시스템 준비 완료</div>
+        </div>
+    </div>
+
+    <!-- 확인 모달 -->
+    <div class="modal" id="confirmModal">
+        <div class="modal-content">
+            <h3 id="modalTitle">확인</h3>
+            <p id="modalMessage">진행하시겠습니까?</p>
+            <div class="modal-buttons">
+                <button class="btn btn-secondary" onclick="closeModal()">취소</button>
+                <button class="btn btn-danger" id="modalConfirmBtn" onclick="modalConfirm()">확인</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==================== 전역 변수 ====================
+        const API_BASE = '';  // 같은 도메인이므로 빈 문자열
+
+        let isConnected = false;
+        let coins = [];
+        let coinData = {};
+        let selectedCoin = null;
+        let prices = {};
+        let bbStatus = {};
+        let positionSymbols = new Set();
+
+        // 차트 관련
+        let chart = null;
+        let candleSeries = null;
+        let priceLines = [];
+
+        // 주문 설정
+        let orderAmount = 100;
+        let orderCount = 3;
+        let orderInterval = 5;
+        let entryOffset = 0;
+
+        // 모달 콜백
+        let modalCallback = null;
+
+        // 물타기 설정
+        let avgInterval = 2;
+        let avgAmount = 500;
+        let avgTpInterval = 2;
+
+        // 물타기 상태 (서버에서 관리)
+        let averagingStates = {};
+        let currentPosition = null;
+
+        // ==================== 초기화 ====================
+        document.addEventListener('DOMContentLoaded', async () => {
+            log('서버 연결 중...', 'info');
+
+            // 엔터키 이벤트
+            document.getElementById('coinSearch').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') addCoin();
+            });
+
+            // 서버 상태 확인
+            await checkServerStatus();
+
+            // 워치리스트 로드
+            await loadWatchlist();
+
+            // 물타기 상태 로드
+            await loadAveragingStates();
+
+            // 가격 업데이트 (5초마다)
+            setInterval(updateAllPrices, 5000);
+
+            // 물타기 상태 갱신 (10초마다)
+            setInterval(loadAveragingStates, 10000);
+        });
+
+        // ==================== 서버 API ====================
+        async function apiGet(endpoint) {
+            try {
+                const res = await fetch(API_BASE + endpoint);
+                return await res.json();
+            } catch (e) {
+                console.error('API GET 실패:', endpoint, e);
+                return null;
+            }
+        }
+
+        async function apiPost(endpoint, data = {}) {
+            try {
+                const res = await fetch(API_BASE + endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                return await res.json();
+            } catch (e) {
+                console.error('API POST 실패:', endpoint, e);
+                return null;
+            }
+        }
+
+        // ==================== 서버 연결 ====================
+        async function checkServerStatus() {
+            const status = await apiGet('/api/status');
+            if (status && status.status === 'ok') {
+                isConnected = true;
+                updateStatus(true, `서버 연결됨 (물타기: ${status.averaging_count}개)`);
+                document.getElementById('orderBtn').disabled = false;
+                document.getElementById('cancelBtn').disabled = false;
+                log('Python 서버 연결 성공', 'success');
+            } else {
+                isConnected = false;
+                updateStatus(false, '서버 연결 실패');
+                log('서버 연결 실패', 'error');
+            }
+        }
+
+        function updateStatus(connected, text) {
+            const bar = document.getElementById('statusBar');
+            const statusText = document.getElementById('statusText');
+            bar.className = `status ${connected ? 'connected' : 'disconnected'}`;
+            statusText.textContent = text;
+        }
+
+        // ==================== 워치리스트 ====================
+        async function loadWatchlist() {
+            const data = await apiGet('/api/watchlist');
+            if (data && Array.isArray(data)) {
+                coins = data.map(item => item.symbol);
+                coinData = {};
+                data.forEach(item => {
+                    coinData[item.symbol] = {
+                        status: item.status,
+                        bb_upper: item.bb_upper
+                    };
+                    prices[item.symbol] = item.price;
+                    if (item.bb_upper) bbStatus[item.symbol] = true;
+                });
+                renderCoinList();
+            }
+        }
+
+        async function addCoin() {
+            let coin = document.getElementById('coinSearch').value.trim().toUpperCase();
+            if (!coin) return;
+
+            if (!coin.endsWith('USDT')) coin += 'USDT';
+
+            if (coins.includes(coin)) {
+                log(`${coin}은 이미 추가됨`, 'error');
+                return;
+            }
+
+            log(`${coin} 추가 중...`, 'info');
+
+            const result = await apiPost('/api/watchlist/add', { symbol: coin });
+            if (result && result.success) {
+                coins.push(coin);
+                coinData[coin] = { status: 'watching', bb_upper: false };
+                document.getElementById('coinSearch').value = '';
+                await updatePrice(coin);
+                renderCoinList();
+                log(`${coin} 추가됨`, 'success');
+            } else {
+                log(`${coin} 추가 실패: ${result?.error || '알 수 없는 오류'}`, 'error');
+            }
+        }
+
+        async function removeCoin(coin, e) {
+            e.stopPropagation();
+
+            if (coinData[coin]?.status === 'entered') {
+                log(`${coin} 삭제 불가: 포지션 보유 중`, 'error');
+                return;
+            }
+
+            const result = await apiPost('/api/watchlist/remove', { symbol: coin });
+            if (result && result.success) {
+                coins = coins.filter(c => c !== coin);
+                delete coinData[coin];
+                if (selectedCoin === coin) {
+                    selectedCoin = null;
+                    document.getElementById('selectedCoinCard').style.display = 'none';
+                }
+                renderCoinList();
+                log(`${coin} 삭제됨`, 'info');
+            }
+        }
+
+        async function selectCoin(coin) {
+            selectedCoin = coin;
+            renderCoinList();
+
+            document.getElementById('selectedCoinCard').style.display = 'block';
+            document.getElementById('chartTitle').textContent = `${coin.replace('USDT', '')} / USDT  •  4시간봉`;
+            document.getElementById('selectedSymbol').textContent = coin.replace('USDT', '');
+
+            const price = prices[coin] || 0;
+            document.getElementById('selectedPrice').textContent = `$${price.toFixed(4)}`;
+
+            log(`${coin} 선택 - $${price.toFixed(4)}`, 'info');
+
+            // 차트 생성
+            await createChart(coin);
+
+            // 물타기 카드 업데이트
+            await updateAveragingCard(coin);
+
+            // 물타기 진행 중이면 상태창 표시
+            if (averagingStates[coin]?.is_active) {
+                updateAveragingCardUI(coin);
+            }
+        }
+
+        function renderCoinList() {
+            const list = document.getElementById('coinList');
+
+            if (coins.length === 0) {
+                list.innerHTML = '<div style="padding:20px; text-align:center; color:#8b949e;">코인을 추가하세요</div>';
+                return;
+            }
+
+            list.innerHTML = coins.map(coin => {
+                const isSelected = coin === selectedCoin ? 'selected' : '';
+                const isBBUpper = bbStatus[coin] ? 'bb-upper' : '';
+                const data = coinData[coin] || { status: 'watching' };
+                const statusIcon = data.status === 'entered' ? '' : data.status === 'closed' ? '' : '';
+                const statusClass = data.status === 'entered' ? 'status-entered' : data.status === 'closed' ? 'status-closed' : '';
+                return `
+                <div class="coin-item ${isSelected} ${isBBUpper} ${statusClass}" onclick="selectCoin('${coin}')">
+                    <span class="name">${statusIcon}${coin.replace('USDT', '')}</span>
+                    <span class="price">$${(prices[coin] || 0).toFixed(4)}</span>
+                    <button class="delete-btn" onclick="removeCoin('${coin}', event)">×</button>
+                </div>
+            `}).join('');
+        }
+
+        // ==================== 가격 업데이트 ====================
+        async function updatePrice(coin) {
+            const data = await apiGet(`/api/price/${coin}`);
+            if (data && data.price) {
+                prices[coin] = data.price;
+                if (selectedCoin === coin) {
+                    document.getElementById('selectedPrice').textContent = `$${data.price.toFixed(4)}`;
+                }
+            }
+        }
+
+        async function updateAllPrices() {
+            const data = await apiGet('/api/prices');
+            if (data) {
+                for (const symbol of coins) {
+                    if (data[symbol]) {
+                        prices[symbol] = data[symbol];
+                    }
+                }
+                renderCoinList();
+            }
+        }
+
+        // ==================== 차트 ====================
+        async function createChart(symbol) {
+            const container = document.getElementById('chartContainer');
+            container.innerHTML = '';
+
+            chart = LightweightCharts.createChart(container, {
+                width: container.clientWidth,
+                height: 450,
+                layout: {
+                    background: { color: '#161b22' },
+                    textColor: '#c9d1d9'
+                },
+                grid: {
+                    vertLines: { color: '#21262d' },
+                    horzLines: { color: '#21262d' }
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal
+                },
+                rightPriceScale: {
+                    borderColor: '#30363d'
+                },
+                timeScale: {
+                    borderColor: '#30363d',
+                    timeVisible: true
+                }
+            });
+
+            candleSeries = chart.addCandlestickSeries({
+                upColor: '#3fb950',
+                downColor: '#f85149',
+                borderUpColor: '#3fb950',
+                borderDownColor: '#f85149',
+                wickUpColor: '#3fb950',
+                wickDownColor: '#f85149'
+            });
+
+            // 캔들 데이터 로드
+            const candles = await apiGet(`/api/klines/${symbol}?interval=4h&limit=100`);
+            if (candles && candles.length > 0) {
+                candleSeries.setData(candles);
+
+                // 볼린저밴드 계산
+                const bb = calculateBollingerBands(candles);
+
+                const upperSeries = chart.addLineSeries({
+                    color: 'rgba(88, 166, 255, 0.5)',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Solid
+                });
+                upperSeries.setData(bb.map(b => ({ time: b.time, value: b.upper })));
+
+                const middleSeries = chart.addLineSeries({
+                    color: 'rgba(88, 166, 255, 0.3)',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Dashed
+                });
+                middleSeries.setData(bb.map(b => ({ time: b.time, value: b.middle })));
+
+                const lowerSeries = chart.addLineSeries({
+                    color: 'rgba(88, 166, 255, 0.5)',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle.Solid
+                });
+                lowerSeries.setData(bb.map(b => ({ time: b.time, value: b.lower })));
+            }
+
+            // 포지션/오더 라인 추가
+            if (isConnected) {
+                await addPriceLines(symbol);
+            }
+
+            chart.timeScale().fitContent();
+
+            window.addEventListener('resize', () => {
+                if (chart) {
+                    chart.applyOptions({ width: container.clientWidth });
+                }
+            });
+        }
+
+        function calculateBollingerBands(candles, period = 20, multiplier = 2) {
+            const result = [];
+            for (let i = period - 1; i < candles.length; i++) {
+                const slice = candles.slice(i - period + 1, i + 1);
+                const closes = slice.map(c => c.close);
+                const ma = closes.reduce((a, b) => a + b, 0) / period;
+                const variance = closes.reduce((sum, val) => sum + Math.pow(val - ma, 2), 0) / period;
+                const stdDev = Math.sqrt(variance);
+                result.push({
+                    time: candles[i].time,
+                    upper: ma + (multiplier * stdDev),
+                    middle: ma,
+                    lower: ma - (multiplier * stdDev)
+                });
+            }
+            return result;
+        }
+
+        async function addPriceLines(symbol) {
+            priceLines.forEach(line => {
+                try { candleSeries.removePriceLine(line); } catch(e) {}
+            });
+            priceLines = [];
+
+            const [position, orders] = await Promise.all([
+                apiGet(`/api/position/${symbol}`),
+                apiGet(`/api/orders?symbol=${symbol}`)
+            ]);
+
+            // 진입가 라인
+            if (position && position.entryPrice && parseFloat(position.entryPrice) > 0) {
+                const entryPrice = parseFloat(position.entryPrice);
+                const pnl = parseFloat(position.unRealizedProfit || 0);
+                const line = candleSeries.createPriceLine({
+                    price: entryPrice,
+                    color: '#f85149',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: `진입 (${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)})`
+                });
+                priceLines.push(line);
+            }
+
+            // 오픈오더 라인
+            if (orders && Array.isArray(orders)) {
+                const shortOrders = orders.filter(o => o.positionSide === 'SHORT' && o.type === 'LIMIT');
+                for (const order of shortOrders) {
+                    const price = parseFloat(order.price);
+                    const side = order.side === 'SELL' ? '매도' : '매수';
+                    const line = candleSeries.createPriceLine({
+                        price: price,
+                        color: '#58a6ff',
+                        lineWidth: 1,
+                        lineStyle: LightweightCharts.LineStyle.Dashed,
+                        axisLabelVisible: true,
+                        title: side
+                    });
+                    priceLines.push(line);
+                }
+            }
+        }
+
+        // ==================== 설정 조정 ====================
+        function adjustAmount(delta) {
+            const newAmount = orderAmount + delta;
+            if (newAmount >= 10) {
+                orderAmount = newAmount;
+                updateSettingsDisplay();
+            }
+        }
+
+        function adjustCount(delta) {
+            const newCount = orderCount + delta;
+            if (newCount >= 1 && newCount <= 20) {
+                orderCount = newCount;
+                updateSettingsDisplay();
+            }
+        }
+
+        function adjustInterval(delta) {
+            const newInterval = orderInterval + delta;
+            if (newInterval >= 5 && newInterval <= 50) {
+                orderInterval = newInterval;
+                updateSettingsDisplay();
+            }
+        }
+
+        function adjustEntryOffset(delta) {
+            const newOffset = entryOffset + delta;
+            if (newOffset >= 0 && newOffset <= 50) {
+                entryOffset = newOffset;
+                updateSettingsDisplay();
+            }
+        }
+
+        function updateSettingsDisplay() {
+            document.getElementById('amountValue').textContent = `$${orderAmount}`;
+            document.getElementById('countValue').textContent = `${orderCount}회`;
+            document.getElementById('intervalValue').textContent = `+${orderInterval}%`;
+            document.getElementById('entryOffsetValue').textContent = entryOffset === 0 ? '0% (시장가)' : `+${entryOffset}% (지정가)`;
+            document.getElementById('totalAmount').textContent = `$${orderAmount * orderCount}`;
+            document.getElementById('headerInfo').textContent =
+                `${orderInterval}% 간격 | ${orderCount}개 주문 | $${orderAmount}/주문 | 총 $${orderAmount * orderCount}`;
+            document.getElementById('orderBtn').textContent = `숏 주문 실행 (${orderCount}개)`;
+        }
+
+        // ==================== 주문 실행 ====================
+        async function placeOrders() {
+            if (!selectedCoin || !isConnected) return;
+
+            const btn = document.getElementById('orderBtn');
+            btn.disabled = true;
+            btn.textContent = '주문 실행 중...';
+
+            try {
+                const result = await apiPost('/api/grid/place', {
+                    symbol: selectedCoin,
+                    amount: orderAmount,
+                    count: orderCount,
+                    interval: orderInterval,
+                    entry_offset: entryOffset,
+                    leverage: 2
+                });
+
+                if (result && result.success) {
+                    log(`${selectedCoin} 그리드 주문 완료: ${result.orders.length}개`, 'success');
+                    alert(`${selectedCoin}\n${result.orders.length}개 주문 완료!`);
+
+                    // 차트 갱신
+                    await addPriceLines(selectedCoin);
+                } else {
+                    throw new Error(result?.error || '주문 실패');
+                }
+            } catch (e) {
+                log(`주문 실패: ${e.message}`, 'error');
+                alert(`주문 실패: ${e.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = `숏 주문 실행 (${orderCount}개)`;
+            }
+        }
+
+        // ==================== 주문 취소 ====================
+        async function confirmCancel() {
+            if (!selectedCoin) {
+                alert('종목을 선택하세요');
+                return;
+            }
+            if (!isConnected) {
+                alert('서버 연결 필요');
+                return;
+            }
+
+            await cancelOrders();
+        }
+
+        async function cancelOrders() {
+            if (!selectedCoin || !isConnected) return;
+
+            log(`${selectedCoin} 오픈오더 취소 중...`, 'info');
+
+            const result = await apiPost('/api/order/cancel_all', { symbol: selectedCoin });
+            if (result && result.success) {
+                log(`${selectedCoin} 오픈오더 전체 취소 완료`, 'success');
+                alert(`${selectedCoin}\n오픈오더 전체 취소 완료!`);
+
+                if (chart && selectedCoin) {
+                    await addPriceLines(selectedCoin);
+                }
+            } else {
+                log(`취소 실패: ${result?.error || '알 수 없는 오류'}`, 'error');
+            }
+        }
+
+        // ==================== 유틸리티 ====================
+        function log(message, type = '') {
+            const logArea = document.getElementById('logArea');
+            const time = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+            const className = type ? ` class="${type}"` : '';
+            logArea.innerHTML += `\n<span${className}>[${time}] ${message}</span>`;
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        function closeModal() {
+            document.getElementById('confirmModal').classList.remove('show');
+            modalCallback = null;
+        }
+
+        function modalConfirm() {
+            closeModal();
+            if (modalCallback) modalCallback();
+        }
+
+        // ==================== 물타기 설정 조절 ====================
+        function adjustAvgInterval(delta) {
+            const newVal = avgInterval + delta;
+            if (newVal >= 1 && newVal <= 20) {
+                avgInterval = newVal;
+                document.getElementById('avgIntervalValue').textContent = `+${avgInterval}%`;
+            }
+        }
+
+        function adjustAvgAmount(delta) {
+            const newVal = avgAmount + delta;
+            if (newVal >= 100) {
+                avgAmount = newVal;
+                document.getElementById('avgAmountValue').textContent = `$${avgAmount}`;
+            }
+        }
+
+        function adjustTpInterval(delta) {
+            const newVal = avgTpInterval + delta;
+            if (newVal >= 1 && newVal <= 20) {
+                avgTpInterval = newVal;
+                document.getElementById('avgTpIntervalValue').textContent = `-${avgTpInterval}%`;
+                updateTpPreview();
+            }
+        }
+
+        // 기준 평단 수동 설정
+        async function setBaseEntry() {
+            const input = document.getElementById('baseEntryInput').value.trim();
+            const price = parseFloat(input);
+            if (isNaN(price) || price <= 0) {
+                log('유효한 가격을 입력하세요', 'error');
+                return;
+            }
+
+            if (!selectedCoin) return;
+
+            const result = await apiPost('/api/averaging/set_base', {
+                symbol: selectedCoin,
+                base_entry: price
+            });
+
+            if (result && result.success) {
+                log(`기준 평단 설정: $${price.toFixed(4)}`, 'success');
+                updateTpPreview();
+            } else {
+                log(`기준 평단 설정 실패`, 'error');
+            }
+        }
+
+        function updateTpPreview() {
+            const input = document.getElementById('baseEntryInput');
+            const preview = document.getElementById('tpPreview');
+            if (!input || !preview) return;
+
+            const state = selectedCoin ? averagingStates[selectedCoin] : null;
+            const basePrice = parseFloat(input.value) || state?.start_entry || 0;
+            if (basePrice > 0) {
+                const tpPrice = basePrice * (1 - avgTpInterval / 100);
+                preview.textContent = `익절가: $${tpPrice.toFixed(4)}`;
+                preview.style.color = '#7ee787';
+            } else {
+                preview.textContent = '익절가: -';
+                preview.style.color = '#8b949e';
+            }
+        }
+
+        // ==================== 물타기 상태 로드 ====================
+        async function loadAveragingStates() {
+            const data = await apiGet('/api/averaging/list');
+            if (data) {
+                averagingStates = data;
+                renderActiveAveragingList();
+            }
+        }
+
+        // 포지션 정보 및 물타기 카드 업데이트
+        async function updateAveragingCard(symbol) {
+            const noPositionMsg = document.getElementById('noPositionMsg');
+            const positionInfo = document.getElementById('positionInfo');
+            const avgCoinName = document.getElementById('avgCoinName');
+            const avgSettings = document.getElementById('avgSettings');
+            const avgButtons = document.getElementById('avgButtons');
+
+            if (!symbol) {
+                avgCoinName.textContent = '';
+                noPositionMsg.textContent = '종목을 선택하세요';
+                noPositionMsg.style.display = 'block';
+                positionInfo.style.display = 'none';
+                if (avgSettings) avgSettings.style.display = 'none';
+                if (avgButtons) avgButtons.style.display = 'none';
+                return;
+            }
+
+            avgCoinName.textContent = `- ${symbol.replace('USDT', '')}`;
+
+            if (!isConnected) {
+                noPositionMsg.textContent = '서버 연결 필요';
+                noPositionMsg.style.display = 'block';
+                positionInfo.style.display = 'none';
+                if (avgSettings) avgSettings.style.display = 'none';
+                if (avgButtons) avgButtons.style.display = 'none';
+                return;
+            }
+
+            const position = await apiGet(`/api/position/${symbol}`);
+            currentPosition = position;
+
+            if (position && position.positionAmt && parseFloat(position.positionAmt) !== 0) {
+                const entryPrice = parseFloat(position.entryPrice);
+                const positionAmt = Math.abs(parseFloat(position.positionAmt));
+                const pnl = parseFloat(position.unRealizedProfit || 0);
+                const pnlColor = pnl >= 0 ? '#7ee787' : '#f85149';
+
+                document.getElementById('avgEntryPrice').textContent = `$${entryPrice.toFixed(4)}`;
+                document.getElementById('avgPositionQty').textContent = positionAmt.toFixed(4);
+                document.getElementById('avgPnL').innerHTML = `<span style="color:${pnlColor}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span>`;
+
+                noPositionMsg.style.display = 'none';
+                positionInfo.style.display = 'block';
+                if (avgSettings) avgSettings.style.display = 'block';
+                if (avgButtons) avgButtons.style.display = 'flex';
+
+                // 기준 평단 입력창
+                const state = averagingStates[symbol];
+                const baseInput = document.getElementById('baseEntryInput');
+                if (state && state.start_entry) {
+                    baseInput.value = state.start_entry.toFixed(4);
+                } else {
+                    baseInput.value = entryPrice.toFixed(4);
+                }
+                updateTpPreview();
+
+                updateAveragingCardUI(symbol);
+            } else {
+                noPositionMsg.textContent = `${symbol.replace('USDT', '')} 포지션 없음`;
+                noPositionMsg.style.display = 'block';
+                positionInfo.style.display = 'none';
+                if (avgSettings) avgSettings.style.display = 'none';
+                if (avgButtons) avgButtons.style.display = 'none';
+            }
+        }
+
+        // 물타기 카드 버튼 UI 업데이트
+        function updateAveragingCardUI(symbol) {
+            const state = averagingStates[symbol];
+            const isActive = state?.is_active;
+
+            document.getElementById('startAvgBtn').style.display = isActive ? 'none' : 'block';
+            document.getElementById('stopAvgBtn').style.display = isActive ? 'block' : 'none';
+            document.getElementById('refreshAvgBtn').style.display = isActive ? 'block' : 'none';
+            document.getElementById('forceTpBtn').style.display = isActive ? 'block' : 'none';
+            document.getElementById('avgStatus').style.display = isActive ? 'block' : 'none';
+            document.getElementById('avgProgressCard').style.display = isActive ? 'block' : 'none';
+            document.getElementById('avgDetailCard').style.display = isActive ? 'block' : 'none';
+
+            if (isActive && state) {
+                updateAvgProgress(symbol, state);
+            }
+        }
+
+        // 활성 물타기 목록 렌더링
+        function renderActiveAveragingList() {
+            const activeSymbols = Object.keys(averagingStates).filter(s => averagingStates[s].is_active);
+            const listEl = document.getElementById('activeAvgList');
+            const summaryCard = document.getElementById('activeAvgSummaryCard');
+            const summaryEl = document.getElementById('activeAvgSummary');
+
+            if (!listEl) return;
+
+            if (activeSymbols.length === 0) {
+                listEl.innerHTML = '<span style="color:#8b949e;">없음</span>';
+                if (summaryCard) summaryCard.style.display = 'none';
+            } else {
+                listEl.innerHTML = activeSymbols.map(symbol => {
+                    return `<span style="background:#238636; padding:2px 8px; border-radius:4px; margin-right:5px; cursor:pointer;" onclick="selectCoin('${symbol}')">${symbol.replace('USDT','')} <span style="color:#f85149; cursor:pointer;" onclick="event.stopPropagation(); stopAveraging('${symbol}')">×</span></span>`;
+                }).join('');
+
+                if (summaryCard && summaryEl) {
+                    summaryCard.style.display = 'block';
+                    renderActiveAvgSummary(activeSymbols);
+                }
+            }
+        }
+
+        // 활성 물타기 요약 정보 렌더링
+        async function renderActiveAvgSummary(activeSymbols) {
+            const summaryEl = document.getElementById('activeAvgSummary');
+            if (!summaryEl) return;
+
+            let html = '';
+
+            for (const symbol of activeSymbols) {
+                const state = averagingStates[symbol];
+                if (!state) continue;
+
+                const currentPrice = prices[symbol] || state.current_price || 0;
+                const currentQty = state.last_qty || 0;
+                const currentEntry = state.last_entry || 0;
+                const startQty = state.start_qty || 0;
+                const startEntry = state.start_entry || 0;
+
+                const addedQty = currentQty - startQty;
+                const hasAdded = addedQty > 0;
+
+                const isSelected = symbol === selectedCoin;
+
+                html += `<div style="padding:10px; background:${isSelected ? '#1a3a1a' : '#21262d'}; border-radius:6px; margin-bottom:8px; border:${isSelected ? '1px solid #238636' : 'none'}; cursor:pointer;" onclick="selectCoin('${symbol}')">`;
+
+                html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">`;
+                html += `<span style="font-weight:bold; color:#58a6ff; font-size:14px;">${symbol.replace('USDT', '')}</span>`;
+                const realizedProfit = state.realized_profit || 0;
+                html += `<span style="color:#7ee787; font-weight:bold;">+$${realizedProfit.toFixed(2)}</span>`;
+                html += `</div>`;
+
+                html += `<div style="display:flex; justify-content:space-between; color:#c9d1d9; margin-bottom:4px;">`;
+                html += `<span>평단: $${currentEntry.toFixed(4)}</span>`;
+                html += `<span>수량: ${currentQty.toFixed(0)}</span>`;
+                html += `</div>`;
+
+                html += `<div style="display:flex; justify-content:space-between; color:#8b949e; margin-bottom:4px;">`;
+                html += `<span>기준가: $${startEntry.toFixed(4)}</span>`;
+                if (hasAdded) {
+                    html += `<span style="color:#f0883e;">추가: +${addedQty.toFixed(0)}</span>`;
+                } else {
+                    html += `<span>추가: 0</span>`;
+                }
+                html += `</div>`;
+
+                html += `</div>`;
+            }
+
+            summaryEl.innerHTML = html;
+        }
+
+        // ==================== 물타기 시작/정지 ====================
+        async function startAveraging() {
+            if (!selectedCoin || !isConnected || !currentPosition) {
+                log('물타기 시작 실패: 포지션 없음', 'error');
+                return;
+            }
+
+            log(`${selectedCoin} 물타기 시작 중...`, 'info');
+
+            const result = await apiPost('/api/averaging/start', {
+                symbol: selectedCoin,
+                avg_interval: avgInterval,
+                avg_tp_interval: avgTpInterval,
+                avg_amount: avgAmount
+            });
+
+            if (result && result.success) {
+                log(`${selectedCoin} 물타기 시작됨`, 'success');
+                await loadAveragingStates();
+                updateAveragingCardUI(selectedCoin);
+            } else {
+                log(`물타기 시작 실패: ${result?.error || '알 수 없는 오류'}`, 'error');
+            }
+        }
+
+        async function stopAveraging(symbol = selectedCoin) {
+            if (!symbol) return;
+
+            log(`${symbol} 물타기 정지 중...`, 'info');
+
+            const result = await apiPost('/api/averaging/stop', { symbol });
+            if (result && result.success) {
+                log(`${symbol} 물타기 정지됨`, 'success');
+                await loadAveragingStates();
+                if (symbol === selectedCoin) {
+                    updateAveragingCardUI(symbol);
+                }
+            } else {
+                log(`물타기 정지 실패`, 'error');
+            }
+        }
+
+        async function refreshAveragingOrders(symbol = selectedCoin) {
+            if (!symbol) return;
+
+            log(`${symbol} 물타기 주문 갱신 중...`, 'info');
+
+            const result = await apiPost('/api/averaging/fix_tp', { symbol });
+            if (result && result.success) {
+                log(`${symbol} 주문 갱신 완료`, 'success');
+            }
+        }
+
+        async function forcePlaceTpOrder(symbol = selectedCoin) {
+            if (!symbol) return;
+
+            log(`${symbol} 강제 익절 중...`, 'info');
+
+            const result = await apiPost('/api/averaging/force_tp', { symbol });
+            if (result && result.success) {
+                log(`${symbol} 강제 익절 완료`, 'success');
+            } else {
+                log(`강제 익절 실패`, 'error');
+            }
+        }
+
+        // 물타기 효과 표시 업데이트
+        function updateAvgProgress(symbol, state) {
+            if (!state) return;
+
+            const currentQty = state.last_qty || 0;
+            const currentEntry = state.last_entry || 0;
+            const startQty = state.start_qty || 0;
+            const startEntry = state.start_entry || 0;
+            const currentPrice = state.current_price || prices[symbol] || 0;
+
+            // 시작 상태 표시
+            document.getElementById('avgStartInfo').textContent =
+                `$${startEntry.toFixed(4)} × ${startQty.toFixed(0)}`;
+
+            // 현재 상태 표시
+            document.getElementById('avgCurrentInfo').textContent =
+                `$${currentEntry.toFixed(4)} × ${currentQty.toFixed(0)}`;
+
+            // 평단 변화
+            const entryChange = currentEntry - startEntry;
+            const entryChangePct = startEntry > 0 ? (entryChange / startEntry * 100).toFixed(2) : '0';
+            const entryColor = entryChange > 0 ? '#7ee787' : entryChange < 0 ? '#f85149' : '#8b949e';
+            const entrySign = entryChange > 0 ? '+' : entryChange < 0 ? '' : '';
+            document.getElementById('avgEntryChange').innerHTML =
+                `<span style="color:${entryColor}">${entrySign}$${entryChange.toFixed(4)} (${entryChangePct}%)</span>`;
+
+            // 수량 변화
+            const qtyChange = currentQty - startQty;
+            const qtyColor = qtyChange < 0 ? '#7ee787' : qtyChange > 0 ? '#f0883e' : '#8b949e';
+            const qtySign = qtyChange > 0 ? '+' : '';
+            document.getElementById('avgQtyChange').innerHTML =
+                `<span style="color:${qtyColor}">${qtySign}${qtyChange.toFixed(0)}</span>`;
+
+            // 실현 수익
+            const realizedProfit = state.realized_profit || 0;
+            const tpCount = state.tp_count || 0;
+            document.getElementById('avgPnLChange').innerHTML =
+                `<span style="color:#7ee787;">+$${realizedProfit.toFixed(2)} (${tpCount}회)</span>`;
+
+            // 상세 정보 업데이트
+            updateAvgDetailInfo(symbol, state);
+        }
+
+        // 물타기 상세 정보 업데이트
+        function updateAvgDetailInfo(symbol, state) {
+            const detailInfo = document.getElementById('avgDetailInfo');
+            if (!state || !state.is_active) {
+                document.getElementById('avgDetailCard').style.display = 'none';
+                return;
+            }
+
+            document.getElementById('avgDetailCard').style.display = 'block';
+
+            const currentQty = state.last_qty || 0;
+            const currentEntry = state.last_entry || 0;
+            const startQty = state.start_qty || 0;
+            const startEntry = state.start_entry || 0;
+            const currentPrice = state.current_price || prices[symbol] || 0;
+            const realizedProfit = state.realized_profit || 0;
+            const tpCount = state.tp_count || 0;
+
+            const addedQty = currentQty - startQty;
+            const hasAdded = addedQty > 0;
+
+            let html = '';
+
+            // 실현 수익 강조
+            if (realizedProfit > 0 || tpCount > 0) {
+                html += `<div style="padding:10px; background:linear-gradient(135deg, #238636 0%, #2ea043 100%); border-radius:6px; margin-bottom:10px; text-align:center;">`;
+                html += `<div style="color:#fff; font-size:11px; margin-bottom:4px;">물타기 총 실현 수익</div>`;
+                html += `<div style="color:#fff; font-size:20px; font-weight:bold;">+$${realizedProfit.toFixed(2)}</div>`;
+                html += `<div style="color:rgba(255,255,255,0.8); font-size:11px;">${tpCount}회 익절 성공</div>`;
+                html += `</div>`;
+            }
+
+            // 평단 변화
+            const entryChange = currentEntry - startEntry;
+            const entryChangePct = ((currentEntry / startEntry - 1) * 100);
+            const entryImproved = entryChange > 0;
+
+            html += `<div style="padding:8px; background:#21262d; border-radius:4px; margin-bottom:8px;">`;
+            html += `<div style="color:#8b949e; margin-bottom:4px;">평단 변화</div>`;
+            html += `<div style="display:flex; justify-content:space-between; align-items:center;">`;
+            html += `<div><span style="color:#8b949e;">시작</span> <span style="color:#f0883e;">$${startEntry.toFixed(4)}</span></div>`;
+            html += `<div style="color:#8b949e;">→</div>`;
+            html += `<div><span style="color:#8b949e;">현재</span> <span style="color:#58a6ff;">$${currentEntry.toFixed(4)}</span></div>`;
+            html += `</div>`;
+            const changeColor = entryImproved ? '#7ee787' : '#f85149';
+            html += `<div style="margin-top:6px; color:${changeColor}; font-size:13px;">${entryImproved ? '+' : ''}${entryChangePct.toFixed(2)}% (${entryImproved ? '숏에 유리' : '숏에 불리'})</div>`;
+            html += `</div>`;
+
+            // 물타기 진입 내역
+            const entries = state.entries || [];
+            html += `<div style="padding:8px; background:#21262d; border-radius:4px; margin-bottom:8px;">`;
+            html += `<div style="color:#8b949e; margin-bottom:4px;">물타기 진입 내역</div>`;
+            if (entries.length > 0) {
+                let totalQty = 0;
+                let totalValue = 0;
+                for (let i = 0; i < entries.length; i++) {
+                    const e = entries[i];
+                    totalQty += e.qty;
+                    totalValue += e.price * e.qty;
+                    html += `<div style="margin-bottom:4px; padding:4px; background:#0d1117; border-radius:4px;">`;
+                    html += `<div style="display:flex; justify-content:space-between;">`;
+                    html += `<span style="color:#f0883e;">${i+1}차</span>`;
+                    html += `<span style="color:#58a6ff;">$${e.price.toFixed(4)} × ${e.qty.toFixed(0)}</span>`;
+                    html += `</div>`;
+                    html += `</div>`;
+                }
+                if (totalQty > 0) {
+                    const avgEntryPrice = totalValue / totalQty;
+                    html += `<div style="margin-top:6px; padding-top:6px; border-top:1px solid #30363d;">`;
+                    html += `<div>물타기 평균: <span style="color:#58a6ff;">$${avgEntryPrice.toFixed(4)}</span> × ${totalQty.toFixed(0)}</div>`;
+                    html += `</div>`;
+                }
+            } else {
+                html += `<div style="color:#8b949e;">아직 물타기 체결 없음</div>`;
+            }
+            html += `</div>`;
+
+            // 대기 주문 정보
+            const shortOrderPrice = state.short_order_price || (startEntry * (1 + avgInterval / 100));
+            html += `<div style="padding:8px; background:#21262d; border-radius:4px;">`;
+            html += `<div style="color:#8b949e; margin-bottom:4px;">대기 주문</div>`;
+            html += `<div>숏 주문가: <span style="color:#f0883e;">$${shortOrderPrice.toFixed(4)}</span></div>`;
+            if (hasAdded) {
+                const tpPrice = currentEntry * (1 - avgTpInterval / 100);
+                html += `<div>익절 예정가: <span style="color:#7ee787;">$${tpPrice.toFixed(4)}</span></div>`;
+            }
+            html += `</div>`;
+
+            detailInfo.innerHTML = html;
+        }
+    </script>
+</body>
+</html>

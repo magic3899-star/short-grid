@@ -20,7 +20,25 @@
       "Bash(git commit:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:magic3899-star.github.io)",
-      "Bash(gh api:*)"
+      "Bash(gh api:*)",
+      "Bash(cmd /c copy:*)",
+      "Bash(ssh:*)",
+      "Bash(scp:*)",
+      "Bash(ipconfig:*)",
+      "Bash(findstr:*)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\magic\\\\OneDrive\\\\1 자동매매\\\\1 자동숏 그리드\" -Recurse -File)",
+      "Bash(Select-Object FullName, Length)",
+      "Bash(python3:*)",
+      "Bash(timeout /t 5)",
+      "Bash(tasklist:*)",
+      "Bash(set:*)",
+      "Bash(timeout:*)",
+      "Bash(taskkill:*)",
+      "Bash(cmd /c \"taskkill /PID 14080 /F\")",
+      "Bash(cmd /c \"taskkill /PID 14080 /F && taskkill /PID 34296 /F\")",
+      "Bash(cmd /c:*)",
+      "Bash(wmic process where \"name=''python.exe''\" delete)",
+      "Bash(dir:*)"
     ]
   }
 }

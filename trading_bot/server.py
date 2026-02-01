@@ -4,6 +4,12 @@
 Python으로 완전 구현 (볼린저밴드, 그리드 주문, 차트, 물타기)
 """
 
+import sys
+import io
+# Windows cp949 인코딩 문제 해결
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import threading
@@ -15,6 +21,7 @@ import json
 import os
 import numpy as np
 from datetime import datetime, timedelta
+import websocket
 
 # ==================== 설정 ====================
 try:
@@ -27,7 +34,7 @@ except ImportError:
     BINANCE_API_SECRET = os.environ.get('BINANCE_API_SECRET', '')
     AVG_INTERVAL = 2
     AVG_TP_INTERVAL = 2
-    AVG_AMOUNT = 10
+    AVG_AMOUNT = 500
     CHECK_INTERVAL = 30
 
 API_KEY = BINANCE_API_KEY
@@ -50,6 +57,8 @@ coin_data = {}  # 코인별 데이터 (status, bb 등)
 exchange_info = None  # 거래소 정보 캐시
 bb_cache = {}  # 볼린저밴드 캐시
 trades = []  # 매매 기록
+realtime_prices = {}  # 웹소켓 실시간 가격
+ws_connected = False  # 웹소켓 연결 상태
 
 # 그리드 설정
 grid_settings = {
@@ -141,6 +150,37 @@ def get_all_symbols():
                 and s['status'] == 'TRADING']
     return []
 
+def get_recent_listings(limit=50):
+    """최근 신규상장 종목 조회 (onboardDate 기준)"""
+    info = get_exchange_info()
+    if not info:
+        return []
+
+    symbols_with_date = []
+    now = datetime.now()
+
+    for s in info['symbols']:
+        # USDT 페어, 거래중, 무기한 선물만
+        if (s.get('quoteAsset') == 'USDT' and
+            s.get('status') == 'TRADING' and
+            s.get('contractType') == 'PERPETUAL'):
+
+            onboard = s.get('onboardDate', 0)
+            if onboard:
+                dt = datetime.fromtimestamp(onboard / 1000)
+                days_ago = (now - dt).days
+                symbols_with_date.append({
+                    'symbol': s['symbol'],
+                    'onboard_date': dt.strftime('%Y-%m-%d %H:%M'),
+                    'onboard_timestamp': onboard,
+                    'days_ago': days_ago
+                })
+
+    # 최근 상장순 정렬
+    symbols_with_date.sort(key=lambda x: x['onboard_timestamp'], reverse=True)
+
+    return symbols_with_date[:limit]
+
 def get_symbol_info(symbol):
     info = get_exchange_info()
     if info:
@@ -179,6 +219,9 @@ def get_price(symbol):
         return 0
 
 def get_all_prices():
+    """실시간 가격 반환 (웹소켓 우선, 없으면 REST API)"""
+    if realtime_prices:
+        return realtime_prices.copy()
     try:
         res = requests.get(f'{BASE_URL}/fapi/v1/ticker/price', timeout=5)
         return {p['symbol']: float(p['price']) for p in res.json()}
@@ -231,6 +274,19 @@ def cancel_order(symbol, order_id):
 def cancel_all_orders(symbol):
     for order in get_open_orders(symbol):
         cancel_order(symbol, order['orderId'])
+
+def cancel_orders_by_ids(symbol, order_ids):
+    """특정 주문 ID만 취소 (물타기 봇 전용)"""
+    cancelled = []
+    open_orders = get_open_orders(symbol)
+    open_order_ids = {o['orderId'] for o in open_orders}
+
+    for order_id in order_ids:
+        if order_id in open_order_ids:
+            result = cancel_order(symbol, order_id)
+            if result:
+                cancelled.append(order_id)
+    return cancelled
 
 def set_leverage(symbol, leverage):
     result = api_request('POST', '/fapi/v1/leverage', {'symbol': symbol, 'leverage': leverage}, signed=True)
@@ -401,6 +457,7 @@ class AveragingBot:
         self.avg_interval = avg_interval
         self.avg_tp_interval = avg_tp_interval
         self.avg_amount = avg_amount
+        self._lock = threading.Lock()  # 동시성 제어용 락
 
         info = get_symbol_info(symbol)
         if not info:
@@ -423,7 +480,8 @@ class AveragingBot:
             'entries': [],
             'avg_interval': avg_interval,
             'avg_tp_interval': avg_tp_interval,
-            'avg_amount': avg_amount
+            'avg_amount': avg_amount,
+            'order_ids': []  # 물타기 봇이 생성한 주문 ID 목록
         }
 
     def start(self, start_qty=None, start_entry=None):
@@ -435,9 +493,37 @@ class AveragingBot:
         pos_qty = abs(float(position['positionAmt']))
         entry_price = float(position['entryPrice'])
 
+        # 기존 오픈 주문 확인 (가장 먼저!)
+        orders = get_open_orders(self.symbol)
+        short_orders = [o for o in orders if o.get('positionSide') == 'SHORT']
+        has_sell = any(o.get('side') == 'SELL' for o in short_orders)
+        has_buy = any(o.get('side') == 'BUY' for o in short_orders)
+
+        # 익절 주문(BUY)이 있으면 물타기 진입 상태 → 숏 주문 절대 금지
+        if has_buy:
+            buy_order = next((o for o in short_orders if o.get('side') == 'BUY'), None)
+            if buy_order:
+                tp_qty = float(buy_order.get('origQty', 0))
+                base_qty = pos_qty - tp_qty
+                self.state.update({
+                    'is_active': True,
+                    'start_qty': base_qty,
+                    'start_entry': start_entry or entry_price,
+                    'last_qty': pos_qty,
+                    'last_entry': entry_price,
+                    'entries': [{'price': entry_price, 'qty': tp_qty, 'time': datetime.now().isoformat()}]
+                })
+                log(f'{self.symbol} 익절 주문 존재 → 복원: 기준수량 {base_qty:.0f}, 물타기 {tp_qty:.0f}', 'info')
+                save_state()
+                return True
+
+        # 물타기 추가 수량 계산 (start_qty 기준)
+        base_qty = start_qty or pos_qty
+        added_qty = pos_qty - base_qty
+
         self.state.update({
             'is_active': True,
-            'start_qty': start_qty or pos_qty,
+            'start_qty': base_qty,
             'start_entry': start_entry or entry_price,
             'last_qty': pos_qty,
             'last_entry': entry_price,
@@ -445,38 +531,125 @@ class AveragingBot:
             'entries': []
         })
 
-        log(f'{self.symbol} 물타기 시작 - 기준가: ${self.state["start_entry"]:.4f}', 'success')
-        self.place_short_order()
+        log(f'{self.symbol} 물타기 시작 - 기준가: ${self.state["start_entry"]:.4f}, 기준수량: {base_qty:.0f}', 'success')
+
+        # 물타기 추가 수량 확인 후 적절한 주문 배치
+        if added_qty > self.min_qty:
+            # 이미 물타기 진입됨 → 익절 주문만
+            avg_entry_price = entry_price
+            self.state['entries'].append({
+                'price': avg_entry_price,
+                'qty': added_qty,
+                'time': datetime.now().isoformat()
+            })
+            log(f'{self.symbol} 물타기 진입 감지: {added_qty:.0f}개 @ ${avg_entry_price:.4f}', 'info')
+            if not has_buy:
+                self.place_tp_order(avg_entry_price)
+        else:
+            # 물타기 진입 전 → 숏 주문만
+            if has_sell:
+                log(f'{self.symbol} 숏 주문 이미 존재 - 스킵', 'info')
+            else:
+                self.place_short_order()
+
         save_state()
         return True
 
     def stop(self):
-        cancel_all_orders(self.symbol)
+        self.cancel_my_orders()  # 물타기 봇 주문만 취소
         self.state['is_active'] = False
         save_state()
         log(f'{self.symbol} 물타기 정지', 'info')
 
+    def get_my_open_orders(self):
+        """내가 생성한 오픈 주문만 반환"""
+        orders = get_open_orders(self.symbol)
+        my_order_ids = set(self.state.get('order_ids', []))
+        return [o for o in orders if o.get('orderId') in my_order_ids and o.get('positionSide') == 'SHORT']
+
+    def has_pending_order(self, side):
+        """해당 방향(SELL/BUY)의 대기 주문이 있는지 확인 - 전체 주문 기준"""
+        orders = get_open_orders(self.symbol)
+        for order in orders:
+            if order.get('side') == side and order.get('positionSide') == 'SHORT':
+                return True
+        return False
+
     def place_short_order(self):
+        """숏 주문 배치 - 중복 방지를 위해 모든 SELL 주문 확인"""
+        orders = get_open_orders(self.symbol)
+        my_order_ids = set(self.state.get('order_ids', []))
+
+        for order in orders:
+            if order.get('side') == 'SELL' and order.get('positionSide') == 'SHORT':
+                order_id = order.get('orderId')
+                # 내 주문이면 스킵
+                if order_id in my_order_ids:
+                    log(f'{self.symbol} 내 숏 주문 대기 중 (주문ID: {order_id}) - 스킵', 'info')
+                    return
+                # order_ids가 비어있고 SELL 주문이 있으면 → 수동 주문일 수 있음
+                # 중복 방지를 위해 스킵만 하고 등록하지 않음 (수동 주문 보호)
+                if not my_order_ids:
+                    log(f'{self.symbol} 숏 주문 이미 존재 (주문ID: {order_id}, 수동) - 스킵', 'info')
+                    return
+        # SELL 주문 없음 → 새 주문 생성
+
         price = round_tick(self.state['start_entry'] * (1 + self.avg_interval / 100), self.tick_size, self.price_precision)
         qty = max(round_step((self.avg_amount * 2) / price, self.qty_precision), self.min_qty)
         result = create_order(self.symbol, 'SELL', 'LIMIT', qty, price,
                              trade_type='averaging_short', note=f'물타기 숏 (+{self.avg_interval}%)')
-        if result:
+        if result and 'orderId' in result:
             self.state['short_order_price'] = price
+            self.state['order_ids'].append(result['orderId'])
             save_state()
+            log(f'{self.symbol} 숏 주문 생성: {qty} @ ${price:.4f}', 'success')
 
-    def place_tp_order(self, entry_price):
+    def place_tp_order(self, entry_price=None):
+        """익절 주문 배치 - 물타기 진입가 기준으로 -2%
+        entry_price: 지정하면 해당 가격 사용, 없으면 entries에서 가져옴
+        """
+        orders = get_open_orders(self.symbol)
+        my_order_ids = set(self.state.get('order_ids', []))
+
+        for order in orders:
+            if order.get('side') == 'BUY' and order.get('positionSide') == 'SHORT':
+                order_id = order.get('orderId')
+                # 내 주문이면 스킵
+                if order_id in my_order_ids:
+                    log(f'{self.symbol} 내 익절 주문 대기 중 (주문ID: {order_id}) - 스킵', 'info')
+                    return
+                # order_ids가 비어있고 BUY 주문이 있으면 → 수동 또는 이전 봇 주문
+                # 중복 방지를 위해 스킵 (수동 주문은 건드리지 않음)
+                if not my_order_ids:
+                    log(f'{self.symbol} 이미 익절 주문 대기 중 (주문ID: {order_id}) - 스킵', 'info')
+                    return
+        # BUY 주문 없음 → 새 주문 생성
+
         position = get_position(self.symbol)
         if not position:
             return
         pos_qty = abs(float(position['positionAmt']))
         added_qty = pos_qty - self.state['start_qty']
         if added_qty <= self.min_qty:
+            log(f'{self.symbol} 물타기 수량 부족: {added_qty}', 'warning')
             return
+
+        # 익절가 계산: 물타기 진입가에서 -2% (포지션 평균가 아님!)
+        if entry_price is None:
+            # entries에서 물타기 진입가 가져오기
+            if self.state.get('entries'):
+                entry_price = self.state['entries'][-1]['price']
+            else:
+                # entries 없으면 short_order_price 사용 (물타기 숏 주문가)
+                entry_price = self.state.get('short_order_price', float(position['entryPrice']))
+
         tp_price = round_tick(entry_price * (1 - self.avg_tp_interval / 100), self.tick_size, self.price_precision)
         tp_qty = round_step(added_qty, self.qty_precision)
-        create_order(self.symbol, 'BUY', 'LIMIT', tp_qty, tp_price,
+        result = create_order(self.symbol, 'BUY', 'LIMIT', tp_qty, tp_price,
                     trade_type='averaging_tp', note=f'물타기 익절 (-{self.avg_tp_interval}%)')
+        if result and 'orderId' in result:
+            self.state['order_ids'].append(result['orderId'])
+            log(f'{self.symbol} 익절 주문 생성: {tp_qty} @ ${tp_price:.4f} (진입가 ${entry_price:.4f})', 'success')
         save_state()
 
     def force_tp_order(self):
@@ -496,92 +669,189 @@ class AveragingBot:
                              trade_type='averaging_tp', note='강제 익절')
         return bool(result)
 
+    def cancel_my_orders(self):
+        """물타기 봇이 생성한 주문만 취소"""
+        order_ids = self.state.get('order_ids', [])
+        if order_ids:
+            cancel_orders_by_ids(self.symbol, order_ids)
+        self.state['order_ids'] = []
+        save_state()
+
     def fix_tp_order(self):
-        cancel_all_orders(self.symbol)
+        # 물타기 봇이 생성한 주문만 취소 (수동 주문은 유지)
+        self.cancel_my_orders()
         position = get_position(self.symbol)
         if not position:
             return
+
         pos_qty = abs(float(position['positionAmt']))
         added_qty = pos_qty - self.state.get('start_qty', 0)
-        if added_qty <= self.min_qty:
-            log(f'{self.symbol} 물타기 수량 없음', 'warning')
-            return
-        last_entry = (self.state['entries'][-1]['price'] if self.state.get('entries')
-                     else self.state.get('short_order_price', float(position['entryPrice'])))
-        self.place_tp_order(last_entry)
-        self.place_short_order()
-        log(f'{self.symbol} 익절 재배치 완료', 'success')
+
+        if added_qty > self.min_qty:
+            # 물타기 진입 상태 → 익절 주문만 (place_tp_order가 entries에서 진입가 자동 참조)
+            self.place_tp_order()
+            log(f'{self.symbol} 익절 주문 재배치 완료 (물타기 {added_qty:.0f}개)', 'success')
+        else:
+            # 물타기 진입 전 → 숏 주문만
+            self.place_short_order()
+            log(f'{self.symbol} 숏 주문 재배치 완료', 'success')
 
     def check_and_update(self):
+        """포지션 변화 감지 및 주문 관리 - 락으로 동시 실행 방지"""
         if not self.state.get('is_active'):
             return
-        position = get_position(self.symbol)
-        if not position or float(position['positionAmt']) >= 0:
-            log(f'{self.symbol} 포지션 청산됨 - 자동 정지', 'info')
-            self.stop()
+
+        # 락 획득 시도 (non-blocking)
+        if not self._lock.acquire(blocking=False):
+            log(f'{self.symbol} check_and_update 이미 실행 중 - 스킵', 'info')
             return
 
-        current_qty = abs(float(position['positionAmt']))
-        current_entry = float(position['entryPrice'])
-        current_price = get_price(self.symbol)
-        last_qty = self.state.get('last_qty', current_qty)
-        last_entry = self.state.get('last_entry', current_entry)
-        qty_changed = abs(current_qty - last_qty) > self.min_qty
+        try:
+            position = get_position(self.symbol)
+            if not position or float(position['positionAmt']) >= 0:
+                log(f'{self.symbol} 포지션 청산됨 - 자동 정지', 'info')
+                self.stop()
+                return
 
-        if qty_changed:
-            if current_qty > last_qty:
-                added_qty = current_qty - last_qty
-                added_price = (current_qty * current_entry - last_qty * last_entry) / added_qty
-                self.state['entries'].append({
-                    'price': added_price,
-                    'qty': added_qty,
-                    'time': datetime.now().isoformat()
-                })
-                log(f'{self.symbol} 물타기 진입: ${added_price:.4f} × {added_qty:.0f}', 'success')
-                # 물타기 진입 체결 기록
-                record_trade(
-                    trade_type='averaging_short_filled',
-                    symbol=self.symbol,
-                    side='SELL',
-                    quantity=added_qty,
-                    price=added_price,
-                    note=f'물타기 {len(self.state["entries"])}차 체결'
-                )
-                cancel_all_orders(self.symbol)
-                self.place_tp_order(added_price)
-            elif current_qty < last_qty:
-                filled_qty = last_qty - current_qty
-                tp_profit = filled_qty * last_entry * (self.avg_tp_interval / 100)
-                self.state['realized_profit'] = self.state.get('realized_profit', 0) + tp_profit
-                self.state['tp_count'] = self.state.get('tp_count', 0) + 1
-                self.state['entries'] = []
-                log(f'{self.symbol} 익절: +${tp_profit:.2f} (총 {self.state["tp_count"]}회)', 'success')
-                # 익절 체결 기록
-                record_trade(
-                    trade_type='averaging_tp_filled',
-                    symbol=self.symbol,
-                    side='BUY',
-                    quantity=filled_qty,
-                    price=last_entry * (1 - self.avg_tp_interval / 100),
-                    pnl=tp_profit,
-                    note=f'익절 체결 ({self.state["tp_count"]}회차)'
-                )
-                self.state['start_entry'] = current_price
-                self.state['start_qty'] = current_qty
-                cancel_all_orders(self.symbol)
-                self.place_short_order()
-            self.state['last_qty'] = current_qty
-            self.state['last_entry'] = current_entry
-            save_state()
-        else:
-            short_price = self.state.get('short_order_price', self.state['start_entry'] * (1 + self.avg_interval / 100))
-            threshold = short_price * (1 - self.avg_interval / 100)
-            if current_price < threshold:
-                log(f'{self.symbol} 가격 하락 → 따라가기 (${current_price:.4f})', 'info')
-                cancel_all_orders(self.symbol)
-                self.state['start_entry'] = current_price
-                self.place_short_order()
+            current_qty = abs(float(position['positionAmt']))
+            current_entry = float(position['entryPrice'])
+            current_price = get_price(self.symbol)
+            last_qty = self.state.get('last_qty', current_qty)
+            last_entry = self.state.get('last_entry', current_entry)
+            qty_changed = abs(current_qty - last_qty) > self.min_qty
+
+            if qty_changed:
+                if current_qty > last_qty:
+                    # 물타기 진입 감지
+                    added_qty = current_qty - last_qty
+                    added_price = (current_qty * current_entry - last_qty * last_entry) / added_qty
+                    self.state['entries'].append({
+                        'price': added_price,
+                        'qty': added_qty,
+                        'time': datetime.now().isoformat()
+                    })
+                    log(f'{self.symbol} 물타기 진입: ${added_price:.4f} × {added_qty:.0f}', 'success')
+                    record_trade(
+                        trade_type='averaging_short_filled',
+                        symbol=self.symbol,
+                        side='SELL',
+                        quantity=added_qty,
+                        price=added_price,
+                        note=f'물타기 {len(self.state["entries"])}차 체결'
+                    )
+                    # 기존 숏 주문 ID 제거 (체결됐으므로)
+                    self.state['order_ids'] = [oid for oid in self.state.get('order_ids', [])
+                                               if self._is_order_still_open(oid)]
+                    self.place_tp_order(added_price)
+                elif current_qty < last_qty:
+                    # 익절 감지
+                    filled_qty = last_qty - current_qty
+                    tp_profit = filled_qty * last_entry * (self.avg_tp_interval / 100)
+                    self.state['realized_profit'] = self.state.get('realized_profit', 0) + tp_profit
+                    self.state['tp_count'] = self.state.get('tp_count', 0) + 1
+                    self.state['entries'] = []
+                    log(f'{self.symbol} 익절: +${tp_profit:.2f} (총 {self.state["tp_count"]}회)', 'success')
+                    record_trade(
+                        trade_type='averaging_tp_filled',
+                        symbol=self.symbol,
+                        side='BUY',
+                        quantity=filled_qty,
+                        price=last_entry * (1 - self.avg_tp_interval / 100),
+                        pnl=tp_profit,
+                        note=f'익절 체결 ({self.state["tp_count"]}회차)'
+                    )
+                    self.state['start_entry'] = current_price
+                    self.state['start_qty'] = current_qty
+                    # 기존 익절 주문 ID 제거 (체결됐으므로)
+                    self.state['order_ids'] = [oid for oid in self.state.get('order_ids', [])
+                                               if self._is_order_still_open(oid)]
+                    self.place_short_order()
+                self.state['last_qty'] = current_qty
+                self.state['last_entry'] = current_entry
                 save_state()
+            else:
+                # 물타기 진입 상태 확인
+                added_qty = current_qty - self.state.get('start_qty', current_qty)
+                if added_qty > self.min_qty:
+                    # 물타기 진입됨 → 익절 대기 상태, 가격 따라가기 안함
+                    pass
+                else:
+                    # 물타기 진입 전 상태
+                    # 1. 봇 숏 주문이 없으면 새로 배치
+                    my_order_ids = set(self.state.get('order_ids', []))
+                    orders = get_open_orders(self.symbol)
+                    has_my_sell = any(o.get('orderId') in my_order_ids and o.get('side') == 'SELL'
+                                     for o in orders)
+
+                    if not has_my_sell:
+                        log(f'{self.symbol} 숏 주문 없음 → 새로 배치', 'info')
+                        self.place_short_order()
+                        save_state()
+                    else:
+                        # 2. 가격 따라가기 로직
+                        short_price = self.state.get('short_order_price', self.state['start_entry'] * (1 + self.avg_interval / 100))
+                        threshold = short_price * (1 - self.avg_interval / 100)
+                        if current_price < threshold:
+                            log(f'{self.symbol} 가격 하락 → 따라가기 (${current_price:.4f})', 'info')
+                            self.cancel_my_orders()
+                            self.state['start_entry'] = current_price
+                            self.place_short_order()
+                            save_state()
+        finally:
+            self._lock.release()
+
+    def _is_order_still_open(self, order_id):
+        """주문이 아직 열려있는지 확인"""
+        orders = get_open_orders(self.symbol)
+        return any(o.get('orderId') == order_id for o in orders)
+
+# ==================== 웹소켓 ====================
+def on_ws_message(ws, message):
+    """웹소켓 메시지 수신 (전체 티커)"""
+    global realtime_prices
+    try:
+        data = json.loads(message)
+        if isinstance(data, list):
+            for item in data:
+                if 's' in item and 'c' in item:
+                    realtime_prices[item['s']] = float(item['c'])
+    except Exception as e:
+        pass
+
+def on_ws_error(ws, error):
+    global ws_connected
+    ws_connected = False
+    log(f'웹소켓 오류: {error}', 'error')
+
+def on_ws_close(ws, close_status_code, close_msg):
+    global ws_connected
+    ws_connected = False
+    log('웹소켓 연결 종료', 'warning')
+
+def on_ws_open(ws):
+    global ws_connected
+    ws_connected = True
+    log('웹소켓 연결됨 (실시간 가격)', 'success')
+
+def websocket_stream():
+    """바이낸스 선물 전체 티커 웹소켓"""
+    global ws_connected
+    WS_URL = 'wss://fstream.binance.com/ws/!ticker@arr'
+
+    while True:
+        try:
+            ws = websocket.WebSocketApp(
+                WS_URL,
+                on_message=on_ws_message,
+                on_error=on_ws_error,
+                on_close=on_ws_close,
+                on_open=on_ws_open
+            )
+            ws.run_forever(ping_interval=30, ping_timeout=10)
+        except Exception as e:
+            log(f'웹소켓 재연결 시도: {e}', 'warning')
+        ws_connected = False
+        time.sleep(5)  # 재연결 대기
 
 # ==================== 백그라운드 스레드 ====================
 def background_checker():
@@ -593,6 +863,43 @@ def background_checker():
         except Exception as e:
             log(f'체크 오류: {e}', 'error')
         time.sleep(CHECK_INTERVAL)
+
+def auto_listing_scanner():
+    """4시간마다 신규상장 자동 스캔 및 워치리스트 추가"""
+    SCAN_INTERVAL = 4 * 60 * 60  # 4시간
+    MAX_DAYS = 30  # 30일 이내 상장 종목만
+
+    while True:
+        try:
+            # exchange_info 캐시 갱신
+            global exchange_info
+            exchange_info = None
+            get_exchange_info()
+
+            # 신규상장 조회
+            listings = get_recent_listings(100)
+            recent = [l for l in listings if l['days_ago'] <= MAX_DAYS]
+
+            added = []
+            for item in recent:
+                symbol = item['symbol']
+                if symbol not in watchlist:
+                    info = get_symbol_info(symbol)
+                    if info:
+                        watchlist.append(symbol)
+                        coin_data[symbol] = {'status': 'watching', 'bb_upper': False}
+                        added.append(symbol)
+
+            if added:
+                save_watchlist()
+                log(f'신규상장 자동추가: {len(added)}개 ({", ".join(added[:5])}{"..." if len(added) > 5 else ""})', 'success')
+            else:
+                log(f'신규상장 스캔 완료 - 새 종목 없음 (총 {len(watchlist)}개)', 'info')
+
+        except Exception as e:
+            log(f'신규상장 스캔 오류: {e}', 'error')
+
+        time.sleep(SCAN_INTERVAL)
 
 # ==================== Flask API ====================
 @app.route('/')
@@ -609,6 +916,8 @@ def api_status():
     return jsonify({
         'status': 'ok',
         'api_connected': bool(API_KEY and API_SECRET),
+        'ws_connected': ws_connected,
+        'realtime_prices': len(realtime_prices),
         'averaging_count': len([b for b in averaging_bots.values() if b.state.get('is_active')]),
         'watchlist_count': len(watchlist),
         'server_time': datetime.now().isoformat()
@@ -692,18 +1001,96 @@ def api_bb_scan():
     result = scan_bb_upper()
     return jsonify(result)
 
+# --- 신규상장 ---
+@app.route('/api/listings')
+def api_listings():
+    """최근 신규상장 종목 조회"""
+    limit = request.args.get('limit', 50, type=int)
+    result = get_recent_listings(limit)
+    return jsonify(result)
+
+@app.route('/api/listings/add_to_watchlist', methods=['POST'])
+def api_listings_add_to_watchlist():
+    """신규상장 종목을 워치리스트에 일괄 추가"""
+    data = request.json or {}
+    symbols = data.get('symbols', [])
+    days = data.get('days')  # N일 이내 상장 종목만
+
+    if not symbols and days is not None:
+        # days가 지정되면 해당 기간 내 상장 종목 자동 선택
+        listings = get_recent_listings(100)
+        symbols = [l['symbol'] for l in listings if l['days_ago'] <= days]
+
+    added = []
+    skipped = []
+
+    for symbol in symbols:
+        symbol = symbol.upper()
+        if not symbol.endswith('USDT'):
+            symbol += 'USDT'
+
+        if symbol in watchlist:
+            skipped.append(symbol)
+            continue
+
+        info = get_symbol_info(symbol)
+        if not info:
+            skipped.append(symbol)
+            continue
+
+        watchlist.append(symbol)
+        coin_data[symbol] = {'status': 'watching', 'bb_upper': False}
+        added.append(symbol)
+
+    if added:
+        save_watchlist()
+        log(f'신규상장 {len(added)}개 워치리스트 추가', 'success')
+
+    return jsonify({
+        'success': True,
+        'added': added,
+        'added_count': len(added),
+        'skipped': skipped,
+        'skipped_count': len(skipped)
+    })
+
 # --- 워치리스트 ---
 @app.route('/api/watchlist')
 def api_watchlist():
     prices = get_all_prices()
+
+    # 포지션 보유 종목 확인
+    position_symbols = set()
+    try:
+        positions = get_all_positions()
+        for pos in positions:
+            if pos and float(pos.get('positionAmt', 0)) != 0:
+                position_symbols.add(pos['symbol'])
+    except:
+        pass
+
     result = []
     for symbol in watchlist:
         data = coin_data.get(symbol, {})
+
+        # 포지션 보유 여부로 status 결정
+        status = 'entered' if symbol in position_symbols else 'watching'
+
+        # BB 상단 여부 체크 (15m + 4h 모두 상단)
+        bb_upper = False
+        try:
+            bb_15m = check_bb_position(symbol, '15m')
+            bb_4h = check_bb_position(symbol, '4h')
+            if bb_15m and bb_4h and bb_15m.get('upper') and bb_4h.get('upper'):
+                bb_upper = True
+        except:
+            pass
+
         result.append({
             'symbol': symbol,
             'price': prices.get(symbol, 0),
-            'status': data.get('status', 'watching'),
-            'bb_upper': data.get('bb_upper', False)
+            'status': status,
+            'bb_upper': bb_upper
         })
     return jsonify(result)
 
@@ -855,9 +1242,11 @@ def api_averaging_start():
             data.get('avg_tp_interval', AVG_TP_INTERVAL),
             data.get('avg_amount', AVG_AMOUNT)
         )
+        averaging_bots[symbol] = bot  # 먼저 등록해야 save_state()가 저장함
         if bot.start(data.get('start_qty'), data.get('start_entry')):
-            averaging_bots[symbol] = bot
             return jsonify({'success': True, 'state': bot.state})
+        else:
+            del averaging_bots[symbol]  # 실패하면 제거
         return jsonify({'error': '시작 실패'}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 400
@@ -889,6 +1278,66 @@ def api_averaging_fix_tp():
         averaging_bots[symbol].fix_tp_order()
         return jsonify({'success': True})
     return jsonify({'error': '물타기 없음'}), 400
+
+@app.route('/api/averaging/place_correct_tp', methods=['POST'])
+def api_averaging_place_correct_tp():
+    """물타기 진입량 기준으로 정확한 익절 주문 배치"""
+    data = request.json or {}
+    symbol = data.get('symbol')
+
+    if symbol not in averaging_bots:
+        return jsonify({'error': '물타기 없음'}), 400
+
+    bot = averaging_bots[symbol]
+    position = get_position(symbol)
+    if not position:
+        return jsonify({'error': '포지션 없음'}), 400
+
+    pos_qty = abs(float(position['positionAmt']))
+    start_qty = bot.state.get('start_qty', 0)
+    entries = bot.state.get('entries', [])
+
+    # 물타기로 추가된 수량 계산
+    added_qty = pos_qty - start_qty
+
+    if added_qty <= bot.min_qty:
+        return jsonify({'error': f'물타기 수량 없음 (현재: {pos_qty}, 기준: {start_qty})'}), 400
+
+    # 물타기 진입 평균가 계산
+    if entries:
+        total_value = sum(e['price'] * e['qty'] for e in entries)
+        total_qty = sum(e['qty'] for e in entries)
+        avg_entry = total_value / total_qty if total_qty > 0 else entries[-1]['price']
+    else:
+        avg_entry = bot.state.get('short_order_price', float(position['entryPrice']))
+
+    # 기존 익절 주문 취소
+    orders = get_open_orders(symbol)
+    for order in orders:
+        if order.get('side') == 'BUY' and order.get('positionSide') == 'SHORT':
+            cancel_order(symbol, order['orderId'])
+            log(f'{symbol} 기존 익절 주문 취소: {order["orderId"]}', 'info')
+
+    # 새 익절 주문 배치
+    tp_price = round_tick(avg_entry * (1 - bot.avg_tp_interval / 100), bot.tick_size, bot.price_precision)
+    tp_qty = round_step(added_qty, bot.qty_precision)
+
+    result = create_order(symbol, 'BUY', 'LIMIT', tp_qty, tp_price,
+                trade_type='averaging_tp', note=f'물타기 익절 수정 ({len(entries)}차 기준)')
+
+    if result and 'orderId' in result:
+        bot.state['order_ids'].append(result['orderId'])
+        save_state()
+        return jsonify({
+            'success': True,
+            'tp_qty': tp_qty,
+            'tp_price': tp_price,
+            'avg_entry': avg_entry,
+            'entries_count': len(entries),
+            'order_id': result['orderId']
+        })
+
+    return jsonify({'error': '익절 주문 실패'}), 400
 
 @app.route('/api/averaging/set_base', methods=['POST'])
 def api_averaging_set_base():
@@ -1009,15 +1458,71 @@ if __name__ == '__main__':
                     state.get('avg_tp_interval', AVG_TP_INTERVAL),
                     state.get('avg_amount', AVG_AMOUNT))
                 bot.state = state
-                averaging_bots[symbol] = bot
-                log(f'{symbol} 물타기 복원됨', 'success')
+
+                # 포지션 확인
+                position = get_position(symbol)
+                if not position or float(position['positionAmt']) >= 0:
+                    # 포지션 청산됨 → 비활성화
+                    log(f'{symbol} 포지션 청산됨 - 물타기 비활성화', 'info')
+                    state['is_active'] = False
+                    continue
+
+                pos_qty = abs(float(position['positionAmt']))
+                pos_entry = float(position['entryPrice'])
+                start_qty = bot.state.get('start_qty', pos_qty)
+                added_qty = pos_qty - start_qty
+
+                # last_qty, last_entry 동기화 (포지션 정보와 맞춤)
+                bot.state['last_qty'] = pos_qty
+                bot.state['last_entry'] = pos_entry
+
+                # 기존 오픈 주문 확인
+                open_orders = get_open_orders(symbol)
+                short_orders = [o for o in open_orders if o.get('positionSide') == 'SHORT']
+                open_order_ids = {o['orderId'] for o in short_orders}
+
+                # order_ids 동기화 (실제로 열려있는 것만 유지)
+                bot.state['order_ids'] = [oid for oid in bot.state.get('order_ids', []) if oid in open_order_ids]
+
+                # 현재 오픈 주문 상태 확인 (수동 포함)
+                has_sell_order = any(o.get('side') == 'SELL' for o in short_orders)
+                has_buy_order = any(o.get('side') == 'BUY' for o in short_orders)
+
+                if added_qty > bot.min_qty:
+                    # 물타기 진입됨 → 익절 주문 필요
+                    if not has_buy_order:
+                        bot.place_tp_order()
+                        log(f'{symbol} 복원: 익절 주문 배치 (물타기 {added_qty:.0f}개)', 'info')
+                    else:
+                        log(f'{symbol} 복원: 익절 주문 이미 존재', 'info')
+                else:
+                    # 물타기 진입 전 → 숏 주문 필요
+                    if not has_sell_order:
+                        bot.place_short_order()
+                        log(f'{symbol} 복원: 숏 주문 배치', 'info')
+                    else:
+                        log(f'{symbol} 복원: 숏 주문 이미 존재', 'info')
+
+                averaging_bots[symbol] = bot  # 먼저 등록해야 save_state()가 저장함
+                save_state()
+                log(f'{symbol} 물타기 복원됨 (포지션: {pos_qty:.0f}개, 오픈주문: {len(bot.state["order_ids"])}개)', 'success')
             except Exception as e:
                 log(f'{symbol} 복원 실패: {e}', 'error')
+
+    # 웹소켓 실시간 가격 스트림
+    ws_thread = threading.Thread(target=websocket_stream, daemon=True)
+    ws_thread.start()
+    log('웹소켓 스트림 시작 (실시간 가격)', 'info')
 
     # 백그라운드 체커
     checker = threading.Thread(target=background_checker, daemon=True)
     checker.start()
     log(f'백그라운드 체커 시작 ({CHECK_INTERVAL}초 간격)', 'info')
+
+    # 신규상장 자동 스캐너 (4시간마다)
+    listing_scanner = threading.Thread(target=auto_listing_scanner, daemon=True)
+    listing_scanner.start()
+    log('신규상장 자동 스캐너 시작 (4시간 간격)', 'info')
 
     # Flask 서버
     log('웹서버: http://0.0.0.0:80', 'success')

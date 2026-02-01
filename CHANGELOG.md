@@ -1,5 +1,38 @@
 # 물타기 봇 - 변경 이력
 
+---
+
+## 개발 워크플로우 (메모)
+
+**서버 코드 수정 시 순서:**
+1. 서버에서 파일 다운로드 (`scp root@fundauto.cafe24.com:/root/trading_bot/server.py trading_bot/`)
+2. 로컬에서 수정
+3. 서버에 업로드 (`scp trading_bot/server.py root@fundauto.cafe24.com:/root/trading_bot/`)
+4. 로컬 파일 삭제 (`rm -rf trading_bot/`)
+5. Git 백업: 서버 파일 다운 → commit → push → 로컬 삭제
+
+**서버 정보:**
+- SSH: `root@fundauto.cafe24.com`
+- 경로: `/root/trading_bot/`
+- 웹: `http://fundauto.cafe24.com`
+
+---
+
+## 2026-02-01 (v2.4)
+
+### 핵심 수정: 중복 숏 주문 방지
+- **start() 함수 완전 재작성**: 익절 주문(BUY) 존재 시 숏 주문 절대 금지
+- 익절 주문이 있으면 → 물타기 진입 상태로 복원 (기준수량 자동 계산)
+- 숏 주문이 있으면 → 스킵
+- 둘 다 없으면 → 새 숏 주문 생성
+
+### 로컬 파일 정리
+- 불필요한 로컬 파일 삭제 (start.bat, start.ps1, index.html, web/, static/)
+- 서버 파일 기준으로 Git 백업만 유지
+- 로컬에서 서버 실행 금지 (항상 cafe24 서버에서만 실행)
+
+---
+
 ## 2026-02-01 (v2.3)
 
 ### 버그 수정 및 개선

@@ -1448,66 +1448,14 @@ if __name__ == '__main__':
     # 매매 기록 로드
     load_trades()
 
-    # 물타기 상태 복원
+    # 물타기 상태 로드 (자동 복원 안함 - 사용자가 명시적으로 시작해야 함)
     saved = load_state()
-    for symbol, state in saved.items():
-        if state.get('is_active'):
-            try:
-                bot = AveragingBot(symbol,
-                    state.get('avg_interval', AVG_INTERVAL),
-                    state.get('avg_tp_interval', AVG_TP_INTERVAL),
-                    state.get('avg_amount', AVG_AMOUNT))
-                bot.state = state
-
-                # 포지션 확인
-                position = get_position(symbol)
-                if not position or float(position['positionAmt']) >= 0:
-                    # 포지션 청산됨 → 비활성화
-                    log(f'{symbol} 포지션 청산됨 - 물타기 비활성화', 'info')
-                    state['is_active'] = False
-                    continue
-
-                pos_qty = abs(float(position['positionAmt']))
-                pos_entry = float(position['entryPrice'])
-                start_qty = bot.state.get('start_qty', pos_qty)
-                added_qty = pos_qty - start_qty
-
-                # last_qty, last_entry 동기화 (포지션 정보와 맞춤)
-                bot.state['last_qty'] = pos_qty
-                bot.state['last_entry'] = pos_entry
-
-                # 기존 오픈 주문 확인
-                open_orders = get_open_orders(symbol)
-                short_orders = [o for o in open_orders if o.get('positionSide') == 'SHORT']
-                open_order_ids = {o['orderId'] for o in short_orders}
-
-                # order_ids 동기화 (실제로 열려있는 것만 유지)
-                bot.state['order_ids'] = [oid for oid in bot.state.get('order_ids', []) if oid in open_order_ids]
-
-                # 현재 오픈 주문 상태 확인 (수동 포함)
-                has_sell_order = any(o.get('side') == 'SELL' for o in short_orders)
-                has_buy_order = any(o.get('side') == 'BUY' for o in short_orders)
-
-                if added_qty > bot.min_qty:
-                    # 물타기 진입됨 → 익절 주문 필요
-                    if not has_buy_order:
-                        bot.place_tp_order()
-                        log(f'{symbol} 복원: 익절 주문 배치 (물타기 {added_qty:.0f}개)', 'info')
-                    else:
-                        log(f'{symbol} 복원: 익절 주문 이미 존재', 'info')
-                else:
-                    # 물타기 진입 전 → 숏 주문 필요
-                    if not has_sell_order:
-                        bot.place_short_order()
-                        log(f'{symbol} 복원: 숏 주문 배치', 'info')
-                    else:
-                        log(f'{symbol} 복원: 숏 주문 이미 존재', 'info')
-
-                averaging_bots[symbol] = bot  # 먼저 등록해야 save_state()가 저장함
-                save_state()
-                log(f'{symbol} 물타기 복원됨 (포지션: {pos_qty:.0f}개, 오픈주문: {len(bot.state["order_ids"])}개)', 'success')
-            except Exception as e:
-                log(f'{symbol} 복원 실패: {e}', 'error')
+    if saved:
+        # 모든 물타기 상태를 비활성화로 초기화
+        for symbol, state in saved.items():
+            state['is_active'] = False
+        save_state()
+        log(f'물타기 상태 초기화 완료 (자동 복원 비활성화)', 'info')
 
     # 웹소켓 실시간 가격 스트림
     ws_thread = threading.Thread(target=websocket_stream, daemon=True)

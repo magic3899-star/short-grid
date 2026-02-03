@@ -485,6 +485,7 @@ class AveragingBot:
         }
 
     def start(self, start_qty=None, start_entry=None):
+        """물타기 시작 - 현재 포지션과 주문 상태 확인 후 숏 주문 배치"""
         position = get_position(self.symbol)
         if not position or float(position['positionAmt']) >= 0:
             log(f'{self.symbol} 숏 포지션 없음', 'error')
@@ -492,26 +493,44 @@ class AveragingBot:
 
         pos_qty = abs(float(position['positionAmt']))
         entry_price = float(position['entryPrice'])
-        current_price = get_price(self.symbol)  # 현재 시장가
+        current_price = get_price(self.symbol)
 
-        # 기준가 = 현재 시장가 (사용자가 입력하면 그 값 사용)
+        # 1. 기존 주문 상태 확인
+        orders = get_open_orders(self.symbol)
+        existing_sell = [o for o in orders if o.get('side') == 'SELL']
+        existing_buy = [o for o in orders if o.get('side') == 'BUY']
+
+        log(f'{self.symbol} 현재 상태 - 포지션: {pos_qty:.0f}개 @ ${entry_price:.4f}, 시장가: ${current_price:.4f}', 'info')
+        log(f'{self.symbol} 기존 주문 - SELL: {len(existing_sell)}개, BUY: {len(existing_buy)}개', 'info')
+        log(f'{self.symbol} 설정 - 숏간격: {self.avg_interval}%, 익절간격: {self.avg_tp_interval}%, 금액: ${self.avg_amount}', 'info')
+
+        # 2. 기존 봇 주문 취소 (있으면)
+        if self.state.get('order_ids'):
+            self.cancel_my_orders()
+
+        # 3. 기준가 = 현재 시장가 (사용자가 입력하면 그 값 사용)
         base_price = start_entry if start_entry else current_price
 
+        # 4. 현재 포지션을 기준으로 상태 초기화
         self.state.update({
             'is_active': True,
-            'start_qty': pos_qty,
-            'start_entry': base_price,
+            'start_qty': pos_qty,           # 현재 포지션 = 기준 수량 (이것보다 늘어나면 물타기 진입)
+            'start_entry': base_price,       # 현재가 = 기준가
             'last_qty': pos_qty,
             'last_entry': entry_price,
             'short_order_price': base_price * (1 + self.avg_interval / 100),
-            'entries': [],
+            'entries': [],                   # 물타기 진입 기록 초기화
             'order_ids': []
         })
 
-        log(f'{self.symbol} 물타기 시작 - 기준가: ${base_price:.4f}, 수량: {pos_qty:.0f}, 간격: {self.avg_interval}%', 'success')
+        log(f'{self.symbol} 물타기 시작 - 기준가: ${base_price:.4f}, 기준수량: {pos_qty:.0f}', 'success')
+        log(f'{self.symbol} 숏 주문가: ${base_price * (1 + self.avg_interval / 100):.4f} (기준가+{self.avg_interval}%)', 'info')
 
-        # 처음 시작 시 항상 숏 주문만 배치
-        self.place_short_order()
+        # 5. 숏 주문 배치 (기존 SELL 없으면)
+        if not existing_sell:
+            self.place_short_order()
+        else:
+            log(f'{self.symbol} 기존 SELL 주문 있음 - 숏 주문 스킵', 'info')
 
         save_state()
         return True
@@ -568,12 +587,16 @@ class AveragingBot:
         if not position:
             return
         pos_qty = abs(float(position['positionAmt']))
-        added_qty = pos_qty - self.state['start_qty']
+        start_qty = self.state.get('start_qty', 0)
+        if start_qty <= 0:
+            log(f'{self.symbol} start_qty 없음 - 익절 주문 불가', 'warning')
+            return
+        added_qty = pos_qty - start_qty
         if added_qty <= self.min_qty:
             log(f'{self.symbol} 물타기 수량 부족: {added_qty}', 'warning')
             return
 
-        # 익절가 계산: 물타기 진입가에서 -2% (포지션 평균가 아님!)
+        # 익절가 계산: 물타기 진입가에서 -N% (설정된 avg_tp_interval 사용)
         if entry_price is None:
             # entries에서 물타기 진입가 가져오기
             if self.state.get('entries'):
@@ -584,11 +607,14 @@ class AveragingBot:
 
         tp_price = round_tick(entry_price * (1 - self.avg_tp_interval / 100), self.tick_size, self.price_precision)
         tp_qty = round_step(added_qty, self.qty_precision)
+
+        log(f'{self.symbol} 익절 계산 - 진입가: ${entry_price:.4f}, 익절%: {self.avg_tp_interval}%, 익절가: ${tp_price:.4f}', 'info')
+
         result = create_order(self.symbol, 'BUY', 'LIMIT', tp_qty, tp_price,
                     trade_type='averaging_tp', note=f'물타기 익절 (-{self.avg_tp_interval}%)')
         if result and 'orderId' in result:
             self.state['order_ids'].append(result['orderId'])
-            log(f'{self.symbol} 익절 주문 생성: {tp_qty} @ ${tp_price:.4f} (진입가 ${entry_price:.4f})', 'success')
+            log(f'{self.symbol} 익절 주문: {tp_qty:.0f}개 @ ${tp_price:.4f} (진입가-{self.avg_tp_interval}%)', 'success')
         save_state()
 
     def force_tp_order(self):
@@ -712,8 +738,17 @@ class AveragingBot:
                 # 물타기 진입 상태 확인
                 added_qty = current_qty - self.state.get('start_qty', current_qty)
                 if added_qty > self.min_qty:
-                    # 물타기 진입됨 → 익절 대기 상태, 가격 따라가기 안함
-                    pass
+                    # 물타기 진입됨 → 익절 대기 상태
+                    # 내 익절 주문이 있는지 확인
+                    my_order_ids = set(self.state.get('order_ids', []))
+                    orders = get_open_orders(self.symbol)
+                    has_my_buy = any(o.get('orderId') in my_order_ids and o.get('side') == 'BUY'
+                                     for o in orders)
+
+                    if not has_my_buy:
+                        log(f'{self.symbol} 익절 주문 없음 → 새로 배치', 'info')
+                        self.place_tp_order()
+                        save_state()
                 else:
                     # 물타기 진입 전 상태
                     # 1. 봇 숏 주문이 없으면 새로 배치
@@ -727,11 +762,14 @@ class AveragingBot:
                         self.place_short_order()
                         save_state()
                     else:
-                        # 2. 가격 따라가기 로직
-                        short_price = self.state.get('short_order_price', self.state['start_entry'] * (1 + self.avg_interval / 100))
-                        threshold = short_price * (1 - self.avg_interval / 100)
+                        # 2. 가격 따라가기 로직: 기준가에서 N% 하락하면 숏 주문 재배치
+                        start_entry = self.state.get('start_entry', current_price)
+                        threshold = start_entry * (1 - self.avg_interval / 100)
                         if current_price < threshold:
-                            log(f'{self.symbol} 가격 하락 → 따라가기 (${current_price:.4f})', 'info')
+                            old_short_price = self.state.get('short_order_price', start_entry * (1 + self.avg_interval / 100))
+                            new_short_price = current_price * (1 + self.avg_interval / 100)
+                            log(f'{self.symbol} 가격 하락 → 따라가기', 'info')
+                            log(f'{self.symbol} 기준가 ${start_entry:.4f} → ${current_price:.4f}, 숏 ${old_short_price:.4f} → ${new_short_price:.4f}', 'info')
                             self.cancel_my_orders()
                             self.state['start_entry'] = current_price
                             self.place_short_order()
@@ -1175,17 +1213,29 @@ def api_averaging_start():
     if not symbol:
         return jsonify({'error': '심볼 필요'}), 400
     try:
-        bot = AveragingBot(
-            symbol,
-            data.get('avg_interval', AVG_INTERVAL),
-            data.get('avg_tp_interval', AVG_TP_INTERVAL),
-            data.get('avg_amount', AVG_AMOUNT)
-        )
-        averaging_bots[symbol] = bot  # 먼저 등록해야 save_state()가 저장함
+        # 기존 봇이 있으면 재사용 (저장된 상태 유지)
+        if symbol in averaging_bots:
+            bot = averaging_bots[symbol]
+            # 설정값만 업데이트
+            bot.avg_interval = data.get('avg_interval', bot.avg_interval)
+            bot.avg_tp_interval = data.get('avg_tp_interval', bot.avg_tp_interval)
+            bot.avg_amount = data.get('avg_amount', bot.avg_amount)
+            log(f'{symbol} 기존 봇 재사용 (상태 유지)', 'info')
+        else:
+            # 새 봇 생성
+            bot = AveragingBot(
+                symbol,
+                data.get('avg_interval', AVG_INTERVAL),
+                data.get('avg_tp_interval', AVG_TP_INTERVAL),
+                data.get('avg_amount', AVG_AMOUNT)
+            )
+            averaging_bots[symbol] = bot
+
         if bot.start(data.get('start_qty'), data.get('start_entry')):
             return jsonify({'success': True, 'state': bot.state})
         else:
-            del averaging_bots[symbol]  # 실패하면 제거
+            if not bot.state.get('entries'):  # 신규 시작 실패시만 제거
+                del averaging_bots[symbol]
         return jsonify({'error': '시작 실패'}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 400
@@ -1390,11 +1440,15 @@ if __name__ == '__main__':
     # 물타기 상태 로드 (자동 복원 안함 - 사용자가 명시적으로 시작해야 함)
     saved = load_state()
     if saved:
-        # 모든 물타기 상태를 비활성화로 초기화
+        # 상태는 유지하되 is_active만 False로 (봇 객체 생성)
         for symbol, state in saved.items():
             state['is_active'] = False
-        save_state()
-        log(f'물타기 상태 초기화 완료 (자동 복원 비활성화)', 'info')
+            # 봇 객체 생성하여 상태 복원
+            bot = AveragingBot(symbol)
+            bot.state = state
+            averaging_bots[symbol] = bot
+        save_state()  # 이제 averaging_bots가 있으므로 제대로 저장됨
+        log(f'물타기 상태 로드 완료 ({len(saved)}개, 자동 시작 비활성화)', 'info')
 
     # 웹소켓 실시간 가격 스트림
     ws_thread = threading.Thread(target=websocket_stream, daemon=True)

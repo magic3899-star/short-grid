@@ -38,7 +38,14 @@
       "Bash(cmd /c \"taskkill /PID 14080 /F && taskkill /PID 34296 /F\")",
       "Bash(cmd /c:*)",
       "Bash(wmic process where \"name=''python.exe''\" delete)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(git restore:*)",
+      "Bash(netstat:*)",
+      "Bash(wmic process where \"name like ''%%python%%''\" get processid,commandline)",
+      "Bash(start cmd /k \"ssh root@fundauto.cafe24.com\")",
+      "Bash(start putty -ssh root@fundauto.cafe24.com)",
+      "Bash(start wt ssh root@fundauto.cafe24.com)"
     ]
   }
 }

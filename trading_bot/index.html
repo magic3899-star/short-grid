@@ -862,10 +862,10 @@
             await loadAveragingStates();
 
             // 가격 업데이트 (5초마다)
-            setInterval(updateAllPrices, 5000);
+            setInterval(async () => { await updateAllPrices(); if (selectedCoin) { document.getElementById("selectedPrice").textContent = "$" + (prices[selectedCoin] || 0).toFixed(4); } }, 5000);
 
             // 물타기 상태 갱신 (10초마다)
-            setInterval(loadAveragingStates, 10000);
+            setInterval(async () => { await loadAveragingStates(); if (selectedCoin) await updateAveragingCard(selectedCoin); }, 10000);
         });
 
         // ==================== 서버 API ====================

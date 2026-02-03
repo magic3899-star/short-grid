@@ -492,65 +492,26 @@ class AveragingBot:
 
         pos_qty = abs(float(position['positionAmt']))
         entry_price = float(position['entryPrice'])
+        current_price = get_price(self.symbol)  # 현재 시장가
 
-        # 기존 오픈 주문 확인 (가장 먼저!)
-        orders = get_open_orders(self.symbol)
-        short_orders = [o for o in orders if o.get('positionSide') == 'SHORT']
-        has_sell = any(o.get('side') == 'SELL' for o in short_orders)
-        has_buy = any(o.get('side') == 'BUY' for o in short_orders)
-
-        # 익절 주문(BUY)이 있으면 물타기 진입 상태 → 숏 주문 절대 금지
-        if has_buy:
-            buy_order = next((o for o in short_orders if o.get('side') == 'BUY'), None)
-            if buy_order:
-                tp_qty = float(buy_order.get('origQty', 0))
-                base_qty = pos_qty - tp_qty
-                self.state.update({
-                    'is_active': True,
-                    'start_qty': base_qty,
-                    'start_entry': start_entry or entry_price,
-                    'last_qty': pos_qty,
-                    'last_entry': entry_price,
-                    'entries': [{'price': entry_price, 'qty': tp_qty, 'time': datetime.now().isoformat()}]
-                })
-                log(f'{self.symbol} 익절 주문 존재 → 복원: 기준수량 {base_qty:.0f}, 물타기 {tp_qty:.0f}', 'info')
-                save_state()
-                return True
-
-        # 물타기 추가 수량 계산 (start_qty 기준)
-        base_qty = start_qty or pos_qty
-        added_qty = pos_qty - base_qty
+        # 기준가 = 현재 시장가 (사용자가 입력하면 그 값 사용)
+        base_price = start_entry if start_entry else current_price
 
         self.state.update({
             'is_active': True,
-            'start_qty': base_qty,
-            'start_entry': start_entry or entry_price,
+            'start_qty': pos_qty,
+            'start_entry': base_price,
             'last_qty': pos_qty,
             'last_entry': entry_price,
-            'short_order_price': (start_entry or entry_price) * (1 + self.avg_interval / 100),
-            'entries': []
+            'short_order_price': base_price * (1 + self.avg_interval / 100),
+            'entries': [],
+            'order_ids': []
         })
 
-        log(f'{self.symbol} 물타기 시작 - 기준가: ${self.state["start_entry"]:.4f}, 기준수량: {base_qty:.0f}', 'success')
+        log(f'{self.symbol} 물타기 시작 - 기준가: ${base_price:.4f}, 수량: {pos_qty:.0f}, 간격: {self.avg_interval}%', 'success')
 
-        # 물타기 추가 수량 확인 후 적절한 주문 배치
-        if added_qty > self.min_qty:
-            # 이미 물타기 진입됨 → 익절 주문만
-            avg_entry_price = entry_price
-            self.state['entries'].append({
-                'price': avg_entry_price,
-                'qty': added_qty,
-                'time': datetime.now().isoformat()
-            })
-            log(f'{self.symbol} 물타기 진입 감지: {added_qty:.0f}개 @ ${avg_entry_price:.4f}', 'info')
-            if not has_buy:
-                self.place_tp_order(avg_entry_price)
-        else:
-            # 물타기 진입 전 → 숏 주문만
-            if has_sell:
-                log(f'{self.symbol} 숏 주문 이미 존재 - 스킵', 'info')
-            else:
-                self.place_short_order()
+        # 처음 시작 시 항상 숏 주문만 배치
+        self.place_short_order()
 
         save_state()
         return True
@@ -568,31 +529,21 @@ class AveragingBot:
         return [o for o in orders if o.get('orderId') in my_order_ids and o.get('positionSide') == 'SHORT']
 
     def has_pending_order(self, side):
-        """해당 방향(SELL/BUY)의 대기 주문이 있는지 확인 - 전체 주문 기준"""
+        """해당 방향(SELL/BUY)의 대기 주문이 있는지 확인"""
         orders = get_open_orders(self.symbol)
         for order in orders:
-            if order.get('side') == side and order.get('positionSide') == 'SHORT':
+            if order.get('side') == side:
                 return True
         return False
 
     def place_short_order(self):
-        """숏 주문 배치 - 중복 방지를 위해 모든 SELL 주문 확인"""
+        """숏 주문 배치"""
+        # 기존 SELL 주문 있는지 확인 (positionSide 관계없이)
         orders = get_open_orders(self.symbol)
-        my_order_ids = set(self.state.get('order_ids', []))
-
         for order in orders:
-            if order.get('side') == 'SELL' and order.get('positionSide') == 'SHORT':
-                order_id = order.get('orderId')
-                # 내 주문이면 스킵
-                if order_id in my_order_ids:
-                    log(f'{self.symbol} 내 숏 주문 대기 중 (주문ID: {order_id}) - 스킵', 'info')
-                    return
-                # order_ids가 비어있고 SELL 주문이 있으면 → 수동 주문일 수 있음
-                # 중복 방지를 위해 스킵만 하고 등록하지 않음 (수동 주문 보호)
-                if not my_order_ids:
-                    log(f'{self.symbol} 숏 주문 이미 존재 (주문ID: {order_id}, 수동) - 스킵', 'info')
-                    return
-        # SELL 주문 없음 → 새 주문 생성
+            if order.get('side') == 'SELL':
+                log(f'{self.symbol} SELL 주문 이미 존재 - 스킵', 'info')
+                return
 
         price = round_tick(self.state['start_entry'] * (1 + self.avg_interval / 100), self.tick_size, self.price_precision)
         qty = max(round_step((self.avg_amount * 2) / price, self.qty_precision), self.min_qty)
@@ -602,28 +553,16 @@ class AveragingBot:
             self.state['short_order_price'] = price
             self.state['order_ids'].append(result['orderId'])
             save_state()
-            log(f'{self.symbol} 숏 주문 생성: {qty} @ ${price:.4f}', 'success')
+            log(f'{self.symbol} 숏 주문: {qty}개 @ ${price:.4f} (기준가+{self.avg_interval}%)', 'success')
 
     def place_tp_order(self, entry_price=None):
-        """익절 주문 배치 - 물타기 진입가 기준으로 -2%
-        entry_price: 지정하면 해당 가격 사용, 없으면 entries에서 가져옴
-        """
+        """익절 주문 배치 - 물타기 진입가 기준으로 익절"""
+        # 기존 BUY 주문 있는지 확인 (positionSide 관계없이)
         orders = get_open_orders(self.symbol)
-        my_order_ids = set(self.state.get('order_ids', []))
-
         for order in orders:
-            if order.get('side') == 'BUY' and order.get('positionSide') == 'SHORT':
-                order_id = order.get('orderId')
-                # 내 주문이면 스킵
-                if order_id in my_order_ids:
-                    log(f'{self.symbol} 내 익절 주문 대기 중 (주문ID: {order_id}) - 스킵', 'info')
-                    return
-                # order_ids가 비어있고 BUY 주문이 있으면 → 수동 또는 이전 봇 주문
-                # 중복 방지를 위해 스킵 (수동 주문은 건드리지 않음)
-                if not my_order_ids:
-                    log(f'{self.symbol} 이미 익절 주문 대기 중 (주문ID: {order_id}) - 스킵', 'info')
-                    return
-        # BUY 주문 없음 → 새 주문 생성
+            if order.get('side') == 'BUY':
+                log(f'{self.symbol} BUY 주문 이미 존재 - 스킵', 'info')
+                return
 
         position = get_position(self.symbol)
         if not position:

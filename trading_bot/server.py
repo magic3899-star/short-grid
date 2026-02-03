@@ -1437,18 +1437,19 @@ if __name__ == '__main__':
     # 매매 기록 로드
     load_trades()
 
-    # 물타기 상태 로드 (자동 복원 안함 - 사용자가 명시적으로 시작해야 함)
+    # 물타기 상태 로드 (상태 그대로 복원, 변경 없음)
     saved = load_state()
     if saved:
-        # 상태는 유지하되 is_active만 False로 (봇 객체 생성)
         for symbol, state in saved.items():
-            state['is_active'] = False
-            # 봇 객체 생성하여 상태 복원
+            # 봇 객체 생성하여 상태 그대로 복원
             bot = AveragingBot(symbol)
             bot.state = state
             averaging_bots[symbol] = bot
-        save_state()  # 이제 averaging_bots가 있으므로 제대로 저장됨
-        log(f'물타기 상태 로드 완료 ({len(saved)}개, 자동 시작 비활성화)', 'info')
+            if state.get('is_active'):
+                log(f'{symbol} 물타기 복원됨 (활성)', 'success')
+            else:
+                log(f'{symbol} 물타기 복원됨 (비활성)', 'info')
+        # save_state() 호출 안함 - 기존 상태 유지
 
     # 웹소켓 실시간 가격 스트림
     ws_thread = threading.Thread(target=websocket_stream, daemon=True)
